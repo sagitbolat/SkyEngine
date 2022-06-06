@@ -1,6 +1,6 @@
 #include <windows.h>
 
-int CALLBACK WinMain(
+int CALLBACK wWinMain(
 	HINSTANCE hInstance,
 	HINSTANCE hPrevInstance,
 	LPSTR lpCmdLine,
