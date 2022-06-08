@@ -15,7 +15,7 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="Rendering.cpp">
+    <ClCompile Include="SkyWin32.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
