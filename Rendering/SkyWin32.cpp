@@ -4,8 +4,6 @@
 static bool Running;                // TODO: This is global for now.
 static BITMAPINFO bitmapInfo;       // TODO: So is this.
 static void *bitmapMemory;          // TODO: So is this.
-static HBITMAP bitmapHandle;        // TODO: So is this. 
-static HDC bitmapDeviceContext;     // TODO: So is this.
 
 //  FORWARD FUNCTION DECLERATIONS
 LRESULT CALLBACK Win32WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
@@ -127,12 +125,9 @@ LRESULT CALLBACK Win32WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPa
 
 static void Win32ResizeDIBSection(int width, int height) {
     // TODO: Maybe dont free first, free after and then free first if it fails.
-
-    if (bitmapHandle) {
-        DeleteObject(bitmapHandle); 
-    } 
-    if (!bitmapDeviceContext) {
-        bitmapDeviceContext = CreateCompatibleDC(0);
+    
+    if (bitmapMemory) {
+        VirtualFree(bitmapMemory, 0, MEM_RELEASE);
     }
 
     bitmapInfo.bmiHeader.biSize             = sizeof(bitmapInfo.bmiHeader); 
@@ -146,15 +141,10 @@ static void Win32ResizeDIBSection(int width, int height) {
     // bitmapInfo.bmiHeader.biYPelsPerMeter    = 0; 
     // bitmapInfo.bmiHeader.biClrUsed          = 0;
     // bitmapInfo.bmiHeader.biClrImport        = 0;
-
-    bitmapHandle = CreateDIBSection(
-        bitmapDeviceContext,
-        &bitmapInfo,
-        DIB_RGB_COLORS,             // Specifies the type of bitmap, in this case RGB color. Can also be set to DIB_PAL_COLORS.
-        &bitmapMemory,
-        0, 0
-    );
-
+    
+    int bytesPerPixel = 4;
+    int bitmapMemorySize = (width * height) * bytesPerPixel;
+    bitmapMemory = VirtualAlloc(0, bitmapMemorySize, MEM_COMMIT, PAGE_READWRITE);
 }
 
 static void Win32UpdateWindow(HDC DeviceContext, int x, int y, int width, int height) {
@@ -162,7 +152,7 @@ static void Win32UpdateWindow(HDC DeviceContext, int x, int y, int width, int he
         DeviceContext,
         x, y, width, height,        // This is the buffer we are drawing to.
         x, y, width, height,        // This is the buffer we are drawing from.
-        &bitmapMemory,
+        bitmapMemory,
         &bitmapInfo,
         DIB_RGB_COLORS,             // Specifies the type of bitmap, in this case RGB color. Can also be set to DIB_PAL_COLORS.
         SRCCOPY                     // A bit-wise operation that specifies that we are copying from one bitmap to another. 
