@@ -1,10 +1,16 @@
-#ifndef UNICODE
-#define UNICODE
-#endif 
-
 #include <windows.h>
 
-LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
+//  GLOBAL VARIABLES
+static bool Running;                // TODO: This is global for now.
+static BITMAPINFO bitmapInfo;       // TODO: So is this.
+static void *bitmapMemory;          // TODO: So is this.
+static HBITMAP bitmapHandle;        // TODO: So is this. 
+static HDC bitmapDeviceContext;     // TODO: So is this.
+
+//  FORWARD FUNCTION DECLERATIONS
+LRESULT CALLBACK Win32WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
+static void Win32ResizeDIBSection(int width, int height);
+static void Win32UpdateWindow(HDC DeviceContext, int x, int y, int width, int height);
 
 int WINAPI wWinMain(_In_ HINSTANCE hInstance,
     _In_opt_ HINSTANCE hPrevInstance,
@@ -16,7 +22,7 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance,
 
     WNDCLASS wc = { };
 
-    wc.lpfnWndProc      = WindowProc;
+    wc.lpfnWndProc      = Win32WindowProc;
     wc.hInstance        = hInstance;
     wc.lpszClassName        = CLASS_NAME;
     wc.style        = CS_OWNDC | CS_VREDRAW | CS_HREDRAW;      // TODO: THIS MIGHT BE NOT NECESSARY
@@ -46,10 +52,11 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance,
 
     ShowWindow(hwnd, nCmdShow);
 
+    Running = true;
 
     // Run the message loop.
     // TODO: Replace later with a better loop.
-    for(;;) {
+    while(Running) {
         MSG message = { };
         BOOL messageResult = GetMessage(&message, 0, 0, 0);
 
@@ -61,20 +68,28 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance,
     return 0;
 }
 
-LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
-{
+LRESULT CALLBACK Win32WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     LRESULT Result = { };
-    switch (uMsg)
-    {
+    switch (uMsg) {
         case WM_SIZE: {
-            OutputDebugStringA("SIZE\n");
+            RECT windowSize = { }; 
+            GetClientRect(hwnd, &windowSize);
+            int width = windowSize.right - windowSize.left;
+            int height = windowSize.bottom - windowSize.top;
+            Win32ResizeDIBSection(width, height);
         } break;
         case WM_DESTROY: {
+            
+            // TODO: Handle as an error if Running is true and recreate window.
+            Running = false;
             OutputDebugStringA("DESTROY\n");
-            PostQuitMessage(0);
             return 0;
         } break;
         case WM_CLOSE: {
+
+            // TODO: Give the user an "Are you sure you want to quit?" message.
+            Running = false;
+            
             OutputDebugStringA("CLOSE\n");
         } break;
         case WM_ACTIVATEAPP: {
@@ -83,11 +98,14 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         case WM_PAINT: {
             PAINTSTRUCT Paint;
             HDC DeviceContext = BeginPaint(hwnd, &Paint);
-            
+           
             int x = Paint.rcPaint.left;
             int y = Paint.rcPaint.top;
-            int width = Paint.rcPaint.right - x;
-            int height = Paint.rcPaint.bottom - y;
+            int width = Paint.rcPaint.right - Paint.rcPaint.left;
+            int height = Paint.rcPaint.bottom - Paint.rcPaint.top;
+           
+            Win32UpdateWindow(DeviceContext, x, y, width, height);
+
             PatBlt(
                 DeviceContext,
                 x,
@@ -105,4 +123,48 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         } break;
     }
     return Result;
+}
+
+static void Win32ResizeDIBSection(int width, int height) {
+    // TODO: Maybe dont free first, free after and then free first if it fails.
+
+    if (bitmapHandle) {
+        DeleteObject(bitmapHandle); 
+    } 
+    if (!bitmapDeviceContext) {
+        bitmapDeviceContext = CreateCompatibleDC(0);
+    }
+
+    bitmapInfo.bmiHeader.biSize             = sizeof(bitmapInfo.bmiHeader); 
+    bitmapInfo.bmiHeader.biWidth            = width;
+    bitmapInfo.bmiHeader.biHeight           = height;
+    bitmapInfo.bmiHeader.biPlanes           = 1;
+    bitmapInfo.bmiHeader.biBitCount         = 32;
+    bitmapInfo.bmiHeader.biCompression      = BI_RGB;
+    // bitmapInfo.bmiHeader.bisizeImage        = 0; 
+    // bitmapInfo.bmiHeader.biXPelsPerMeter    = 0; 
+    // bitmapInfo.bmiHeader.biYPelsPerMeter    = 0; 
+    // bitmapInfo.bmiHeader.biClrUsed          = 0;
+    // bitmapInfo.bmiHeader.biClrImport        = 0;
+
+    bitmapHandle = CreateDIBSection(
+        bitmapDeviceContext,
+        &bitmapInfo,
+        DIB_RGB_COLORS,             // Specifies the type of bitmap, in this case RGB color. Can also be set to DIB_PAL_COLORS.
+        &bitmapMemory,
+        0, 0
+    );
+
+}
+
+static void Win32UpdateWindow(HDC DeviceContext, int x, int y, int width, int height) {
+    StretchDIBits(
+        DeviceContext,
+        x, y, width, height,        // This is the buffer we are drawing to.
+        x, y, width, height,        // This is the buffer we are drawing from.
+        &bitmapMemory,
+        &bitmapInfo,
+        DIB_RGB_COLORS,             // Specifies the type of bitmap, in this case RGB color. Can also be set to DIB_PAL_COLORS.
+        SRCCOPY                     // A bit-wise operation that specifies that we are copying from one bitmap to another. 
+    );
 }
