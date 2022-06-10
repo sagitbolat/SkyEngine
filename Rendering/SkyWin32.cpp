@@ -1,14 +1,19 @@
 #include <windows.h>
 
+#include <stdint.h>
+
 //  GLOBAL VARIABLES
 static bool Running;                // TODO: This is global for now.
-static BITMAPINFO bitmapInfo;       // TODO: So is this.
-static void *bitmapMemory;          // TODO: So is this.
+static BITMAPINFO bitmapInfo;     
+static void *bitmapMemory;          
+static int bitmapWidth = { };
+static int bitmapHeight = { };
+
 
 //  FORWARD FUNCTION DECLERATIONS
 LRESULT CALLBACK Win32WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 static void Win32ResizeDIBSection(int width, int height);
-static void Win32UpdateWindow(HDC DeviceContext, int x, int y, int width, int height);
+static void Win32UpdateWindow(HDC DeviceContext, RECT* WindowRect, int x, int y, int width, int height);
 
 int WINAPI wWinMain(_In_ HINSTANCE hInstance,
     _In_opt_ HINSTANCE hPrevInstance,
@@ -102,16 +107,9 @@ LRESULT CALLBACK Win32WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPa
             int width = Paint.rcPaint.right - Paint.rcPaint.left;
             int height = Paint.rcPaint.bottom - Paint.rcPaint.top;
            
-            Win32UpdateWindow(DeviceContext, x, y, width, height);
-
-            PatBlt(
-                DeviceContext,
-                x,
-                y,
-                width,
-                height,
-                BLACKNESS
-            );
+            RECT windowSize = { };
+            GetClientRect(hwnd, &windowSize);
+            Win32UpdateWindow(DeviceContext, &windowSize, x, y, width, height);
 
             EndPaint(hwnd, &Paint);
         } break;
@@ -130,9 +128,12 @@ static void Win32ResizeDIBSection(int width, int height) {
         VirtualFree(bitmapMemory, 0, MEM_RELEASE);
     }
 
+    bitmapWidth = width;
+    bitmapHeight = height;
+
     bitmapInfo.bmiHeader.biSize             = sizeof(bitmapInfo.bmiHeader); 
-    bitmapInfo.bmiHeader.biWidth            = width;
-    bitmapInfo.bmiHeader.biHeight           = height;
+    bitmapInfo.bmiHeader.biWidth            = bitmapWidth;
+    bitmapInfo.bmiHeader.biHeight           = -bitmapHeight;
     bitmapInfo.bmiHeader.biPlanes           = 1;
     bitmapInfo.bmiHeader.biBitCount         = 32;
     bitmapInfo.bmiHeader.biCompression      = BI_RGB;
@@ -143,15 +144,44 @@ static void Win32ResizeDIBSection(int width, int height) {
     // bitmapInfo.bmiHeader.biClrImport        = 0;
     
     int bytesPerPixel = 4;
-    int bitmapMemorySize = (width * height) * bytesPerPixel;
+    int bitmapMemorySize = (bitmapWidth * bitmapHeight) * bytesPerPixel;
     bitmapMemory = VirtualAlloc(0, bitmapMemorySize, MEM_COMMIT, PAGE_READWRITE);
+
+    // Drawing Logic.
+    int pitch = width * bytesPerPixel;
+    uint8_t *row = (uint8_t *)bitmapMemory;
+    for (int y = 0; y < bitmapHeight; ++y) {
+        uint8_t *pixel = (uint8_t *)row;
+        for (int x = 0; x < bitmapWidth; ++x) {
+            //blue channel
+            *pixel = 0;
+            ++pixel;
+            //green channel
+            *pixel = 0;
+            ++pixel;
+            //red channel
+            *pixel = 255;
+            ++pixel;
+            //padding channel. leave at 0
+            *pixel = 0;
+            ++pixel;
+        }
+        row += pitch;
+    }
+
 }
 
-static void Win32UpdateWindow(HDC DeviceContext, int x, int y, int width, int height) {
+static void Win32UpdateWindow(HDC DeviceContext, RECT* WindowRect, int x, int y, int width, int height) {
+    
+    int windowWidth = WindowRect->right - WindowRect->left;
+    int windowHeight = WindowRect->bottom - WindowRect->top;
+
     StretchDIBits(
         DeviceContext,
-        x, y, width, height,        // This is the buffer we are drawing to.
-        x, y, width, height,        // This is the buffer we are drawing from.
+        /*x, y, width, height,        // This is the buffer we are drawing to.
+        x, y, width, height, */       // This is the buffer we are drawing from.
+        0, 0, bitmapWidth, bitmapHeight,
+        0, 0, windowWidth, windowHeight,
         bitmapMemory,
         &bitmapInfo,
         DIB_RGB_COLORS,             // Specifies the type of bitmap, in this case RGB color. Can also be set to DIB_PAL_COLORS.
