@@ -2,33 +2,37 @@
 
 #include <stdint.h>
 
-//  GLOBAL VARIABLES
-static bool Running;                // TODO: This is global for now.
-static BITMAPINFO bitmapInfo;     
-static void *bitmapMemory;          
-static int bitmapWidth = { };
-static int bitmapHeight = { };
+//  GLOBAL VARIABLES 
+// TODO: This is global for now.
+static  bool         Running;                
+static  BITMAPINFO   bitmapInfo;     
+static  void         *bitmapMemory;          
+static  int          bitmapWidth = { };
+static  int          bitmapHeight = { };
+static  int          bytesPerPixel = { };
 
 
 //  FORWARD FUNCTION DECLERATIONS
-LRESULT CALLBACK Win32WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
-static void Win32ResizeDIBSection(int width, int height);
-static void Win32UpdateWindow(HDC DeviceContext, RECT* WindowRect, int x, int y, int width, int height);
+LRESULT CALLBACK    Win32WindowProc         (HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
+static  void        Win32ResizeDIBSection   (int width, int height);
+static  void        Win32UpdateWindow       (HDC DeviceContext, RECT WindowRect, int x, int y, int width, int height);
+static  void        RenderWeirdGradient     (int xOffset, int yOffset);
 
-int WINAPI wWinMain(_In_ HINSTANCE hInstance,
-    _In_opt_ HINSTANCE hPrevInstance,
-    _In_ LPWSTR lpCmdLine,
-    _In_ int nCmdShow)
+int WINAPI wWinMain(
+    _In_        HINSTANCE   hInstance,
+    _In_opt_    HINSTANCE   hPrevInstance,
+    _In_        LPWSTR      lpCmdLine,
+    _In_        int         nCmdShow)
 {
     // Register the window class.
     const wchar_t CLASS_NAME[] = L"SkyEngineWindowClass";
 
     WNDCLASS wc = { };
 
-    wc.lpfnWndProc      = Win32WindowProc;
-    wc.hInstance        = hInstance;
+    wc.lpfnWndProc          = Win32WindowProc;
+    wc.hInstance            = hInstance;
     wc.lpszClassName        = CLASS_NAME;
-    wc.style        = CS_OWNDC | CS_VREDRAW | CS_HREDRAW;      // TODO: THIS MIGHT BE NOT NECESSARY
+    wc.style                = CS_VREDRAW | CS_HREDRAW;      // TODO: THIS MIGHT BE NOT NECESSARY
     //wc.hIcon = TODO: Set the icon
 
         
@@ -37,36 +41,51 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance,
 
     // Create the window.
     HWND hwnd = CreateWindowEx(
-        0,            // Optional window styles.
-        CLASS_NAME,   // Window class
-        L"SkyApp",    // Window text
+        0,              // Optional window styles.
+        CLASS_NAME,     // Window class
+        L"SkyApp",      // Window text
+
         WS_OVERLAPPEDWINDOW | WS_VISIBLE, // Window style
 
-        250, 250,   // Position 
-        1280, 720,  // Size
+        250, 250,       // Position 
+        1280, 720,      // Size
 
-        NULL,       // Parent window    
-        NULL,       // Menu
-        hInstance,  // Instance handle
-        NULL        // Additional application data
+        NULL,           // Parent window    
+        NULL,           // Menu
+        hInstance,      // Instance handle
+        NULL            // Additional application data
     );
 
     if (hwnd == NULL) return 1;     // TODO: Log windowhandler not defined.
 
     ShowWindow(hwnd, nCmdShow);
 
-    Running = true;
 
-    // Run the message loop.
+    // Run the game loop.
     // TODO: Replace later with a better loop.
+    Running     = true;
+    int xOffset = 0;
+    int yOffset = 0;
     while(Running) {
-        MSG message = { };
-        BOOL messageResult = GetMessage(&message, 0, 0, 0);
 
-        if (messageResult <= 0) break;
-        
-        TranslateMessage    (&message);
-        DispatchMessage     (&message);
+        //Process Message Queue
+        MSG message = { };
+        while (PeekMessageW(&message, 0, 0, 0, PM_REMOVE)) {
+            TranslateMessage(&message);
+            DispatchMessage(&message);
+        }
+
+        //draw gradient
+        RenderWeirdGradient(xOffset, yOffset);
+        HDC DeviceContext = GetDC(hwnd);
+        RECT windowSize = { };
+        GetClientRect(hwnd, &windowSize);
+        int windowWidth = windowSize.right - windowSize.left;
+        int windowHeight = windowSize.bottom - windowSize.top;
+        Win32UpdateWindow(DeviceContext, windowSize, 0, 9, windowWidth, windowHeight); 
+        ReleaseDC(hwnd, DeviceContext);
+        ++xOffset;
+        ++yOffset;
     }
     return 0;
 }
@@ -77,8 +96,10 @@ LRESULT CALLBACK Win32WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPa
         case WM_SIZE: {
             RECT windowSize = { }; 
             GetClientRect(hwnd, &windowSize);
-            int width = windowSize.right - windowSize.left;
-            int height = windowSize.bottom - windowSize.top;
+
+            int width   = windowSize.right  - windowSize.left;
+            int height  = windowSize.bottom - windowSize.top;
+
             Win32ResizeDIBSection(width, height);
         } break;
         case WM_DESTROY: {
@@ -102,14 +123,14 @@ LRESULT CALLBACK Win32WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPa
             PAINTSTRUCT Paint;
             HDC DeviceContext = BeginPaint(hwnd, &Paint);
            
-            int x = Paint.rcPaint.left;
-            int y = Paint.rcPaint.top;
-            int width = Paint.rcPaint.right - Paint.rcPaint.left;
-            int height = Paint.rcPaint.bottom - Paint.rcPaint.top;
+            int x       = Paint.rcPaint.left;
+            int y       = Paint.rcPaint.top;
+            int width   = Paint.rcPaint.right - Paint.rcPaint.left;
+            int height  = Paint.rcPaint.bottom - Paint.rcPaint.top;
            
             RECT windowSize = { };
             GetClientRect(hwnd, &windowSize);
-            Win32UpdateWindow(DeviceContext, &windowSize, x, y, width, height);
+            Win32UpdateWindow(DeviceContext, windowSize, x, y, width, height);
 
             EndPaint(hwnd, &Paint);
         } break;
@@ -143,38 +164,17 @@ static void Win32ResizeDIBSection(int width, int height) {
     // bitmapInfo.bmiHeader.biClrUsed          = 0;
     // bitmapInfo.bmiHeader.biClrImport        = 0;
     
-    int bytesPerPixel = 4;
+    bytesPerPixel = 4;
     int bitmapMemorySize = (bitmapWidth * bitmapHeight) * bytesPerPixel;
     bitmapMemory = VirtualAlloc(0, bitmapMemorySize, MEM_COMMIT, PAGE_READWRITE);
 
-    // Drawing Logic.
-    int pitch = width * bytesPerPixel;
-    uint8_t *row = (uint8_t *)bitmapMemory;
-    for (int y = 0; y < bitmapHeight; ++y) {
-        uint8_t *pixel = (uint8_t *)row;
-        for (int x = 0; x < bitmapWidth; ++x) {
-            //blue channel
-            *pixel = 0;
-            ++pixel;
-            //green channel
-            *pixel = 0;
-            ++pixel;
-            //red channel
-            *pixel = 255;
-            ++pixel;
-            //padding channel. leave at 0
-            *pixel = 0;
-            ++pixel;
-        }
-        row += pitch;
-    }
-
+    // TODO: Clear screen to black?
 }
 
-static void Win32UpdateWindow(HDC DeviceContext, RECT* WindowRect, int x, int y, int width, int height) {
+static void Win32UpdateWindow(HDC DeviceContext, RECT WindowRect, int x, int y, int width, int height) {
     
-    int windowWidth = WindowRect->right - WindowRect->left;
-    int windowHeight = WindowRect->bottom - WindowRect->top;
+    int windowWidth     = WindowRect.right     - WindowRect.left;
+    int windowHeight    = WindowRect.bottom    - WindowRect.top;
 
     StretchDIBits(
         DeviceContext,
@@ -187,4 +187,28 @@ static void Win32UpdateWindow(HDC DeviceContext, RECT* WindowRect, int x, int y,
         DIB_RGB_COLORS,             // Specifies the type of bitmap, in this case RGB color. Can also be set to DIB_PAL_COLORS.
         SRCCOPY                     // A bit-wise operation that specifies that we are copying from one bitmap to another. 
     );
+}
+
+
+static void RenderWeirdGradient(int xOffset, int yOffset) {
+    // Drawing Logic.
+    
+    int      pitch  = bitmapWidth * bytesPerPixel;
+    uint8_t* row    = (uint8_t*) bitmapMemory;
+
+    for (int y = 0; y < bitmapHeight; ++y) {
+
+        uint32_t* pixel     = (uint32_t*)row;
+
+        for (int x = 0; x < bitmapWidth; ++x) {
+
+            uint8_t blue    = (uint8_t)(x + xOffset);       //blue channel
+            uint8_t green   = (uint8_t)(0);                 //green channel
+            uint8_t red     = (uint8_t)(y + yOffset);       //red channel
+            
+            
+            *pixel++ = ((red << 16) | (green << 8) | blue);
+        }
+        row += pitch;
+    }
 }
