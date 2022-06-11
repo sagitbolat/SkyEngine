@@ -24,6 +24,11 @@ inline Win32WindowDimensions Win32GetWindowDimensions(HWND hwnd) {
     return(Win32WindowDimensions{ width, height });
 }
 
+//  CONSTANTS
+const int BUFFER_WIDTH  = 1280;
+const int BUFFER_HEIGHT = 720;
+
+
 //  GLOBAL VARIABLES 
 // TODO: This is global for now.
 static bool Running;   
@@ -43,6 +48,8 @@ int WINAPI wWinMain(
 {
     // Register the window class.
     const wchar_t CLASS_NAME[] = L"SkyEngineWindowClass";
+
+    globalBackbuffer = Win32ResizeDIBSection(globalBackbuffer, BUFFER_WIDTH, BUFFER_HEIGHT);
 
     WNDCLASS wc = { };
 
@@ -109,8 +116,6 @@ LRESULT CALLBACK Win32WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPa
     LRESULT Result = { };
     switch (uMsg) {
         case WM_SIZE: {
-            Win32WindowDimensions windowDimensions = Win32GetWindowDimensions(hwnd);
-            globalBackbuffer = Win32ResizeDIBSection(globalBackbuffer, windowDimensions.Width, windowDimensions.Height);
         } break;
         case WM_DESTROY: {
             
@@ -184,12 +189,14 @@ static Win32BitmapBuffer Win32ResizeDIBSection(Win32BitmapBuffer buffer, int wid
 }
 
 static void Win32CopyBufferToWindow(HDC DeviceContext, int windowWidth, int windowHeight, Win32BitmapBuffer buffer) {
+    // TODO: Correct the aspect ratio
+
     StretchDIBits(
         DeviceContext,
         /*x, y, width, height,        // This is the buffer we are drawing to.
         x, y, width, height, */       // This is the buffer we are drawing from.
-        0, 0, buffer.Width, buffer.Height,
         0, 0, windowWidth, windowHeight,
+        0, 0, buffer.Width, buffer.Height,
         buffer.Memory,
         &buffer.Info,
         DIB_RGB_COLORS,             // Specifies the type of bitmap, in this case RGB color. Can also be set to DIB_PAL_COLORS.
