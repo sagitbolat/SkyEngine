@@ -2,21 +2,38 @@
 
 #include <stdint.h>
 
+
+struct Win32BitmapBuffer {
+    BITMAPINFO  Info;
+    void*       Memory;
+    int         Width;
+    int         Height;
+    int         Pitch;
+    int         BytesPerPixel;
+};
+
+struct Win32WindowDimensions {
+    int Width;
+    int Height;
+};
+inline Win32WindowDimensions Win32GetWindowDimensions(HWND hwnd) {
+    RECT windowRect = { };
+    GetClientRect(hwnd, &windowRect);
+    int width = windowRect.right - windowRect.left;
+    int height = windowRect.bottom - windowRect.top;
+    return(Win32WindowDimensions{ width, height });
+}
+
 //  GLOBAL VARIABLES 
 // TODO: This is global for now.
-static  bool         Running;                
-static  BITMAPINFO   bitmapInfo;     
-static  void         *bitmapMemory;          
-static  int          bitmapWidth = { };
-static  int          bitmapHeight = { };
-static  int          bytesPerPixel = { };
-
+static bool Running;   
+static Win32BitmapBuffer globalBackbuffer = { };
 
 //  FORWARD FUNCTION DECLERATIONS
-LRESULT CALLBACK    Win32WindowProc         (HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
-static  void        Win32ResizeDIBSection   (int width, int height);
-static  void        Win32UpdateWindow       (HDC DeviceContext, RECT WindowRect, int x, int y, int width, int height);
-static  void        RenderWeirdGradient     (int xOffset, int yOffset);
+LRESULT CALLBACK            Win32WindowProc         (HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
+static  Win32BitmapBuffer   Win32ResizeDIBSection   (Win32BitmapBuffer buffer, int width, int height);
+static  void                Win32CopyBufferToWindow (HDC DeviceContext, int windowWidth, int windowHeight, Win32BitmapBuffer buffer);
+static  void                RenderWeirdGradient     (Win32BitmapBuffer buffer, int xOffset, int yOffset);
 
 int WINAPI wWinMain(
     _In_        HINSTANCE   hInstance,
@@ -47,8 +64,8 @@ int WINAPI wWinMain(
 
         WS_OVERLAPPEDWINDOW | WS_VISIBLE, // Window style
 
-        250, 250,       // Position 
-        1280, 720,      // Size
+        CW_USEDEFAULT, CW_USEDEFAULT,       // Position 
+        CW_USEDEFAULT, CW_USEDEFAULT,      // Size
 
         NULL,           // Parent window    
         NULL,           // Menu
@@ -76,14 +93,12 @@ int WINAPI wWinMain(
         }
 
         //draw gradient
-        RenderWeirdGradient(xOffset, yOffset);
-        HDC DeviceContext = GetDC(hwnd);
-        RECT windowSize = { };
-        GetClientRect(hwnd, &windowSize);
-        int windowWidth = windowSize.right - windowSize.left;
-        int windowHeight = windowSize.bottom - windowSize.top;
-        Win32UpdateWindow(DeviceContext, windowSize, 0, 9, windowWidth, windowHeight); 
-        ReleaseDC(hwnd, DeviceContext);
+        RenderWeirdGradient     (globalBackbuffer, xOffset, yOffset);
+        HDC DeviceContext       = GetDC(hwnd);
+        Win32WindowDimensions windowDimensions = Win32GetWindowDimensions(hwnd);
+        Win32CopyBufferToWindow (DeviceContext, windowDimensions.Width, windowDimensions.Height, globalBackbuffer);
+        ReleaseDC               (hwnd, DeviceContext);
+
         ++xOffset;
         ++yOffset;
     }
@@ -94,13 +109,8 @@ LRESULT CALLBACK Win32WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPa
     LRESULT Result = { };
     switch (uMsg) {
         case WM_SIZE: {
-            RECT windowSize = { }; 
-            GetClientRect(hwnd, &windowSize);
-
-            int width   = windowSize.right  - windowSize.left;
-            int height  = windowSize.bottom - windowSize.top;
-
-            Win32ResizeDIBSection(width, height);
+            Win32WindowDimensions windowDimensions = Win32GetWindowDimensions(hwnd);
+            globalBackbuffer = Win32ResizeDIBSection(globalBackbuffer, windowDimensions.Width, windowDimensions.Height);
         } break;
         case WM_DESTROY: {
             
@@ -113,7 +123,7 @@ LRESULT CALLBACK Win32WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPa
 
             // TODO: Give the user an "Are you sure you want to quit?" message.
             Running = false;
-            
+
             OutputDebugStringA("CLOSE\n");
         } break;
         case WM_ACTIVATEAPP: {
@@ -128,9 +138,8 @@ LRESULT CALLBACK Win32WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPa
             int width   = Paint.rcPaint.right - Paint.rcPaint.left;
             int height  = Paint.rcPaint.bottom - Paint.rcPaint.top;
            
-            RECT windowSize = { };
-            GetClientRect(hwnd, &windowSize);
-            Win32UpdateWindow(DeviceContext, windowSize, x, y, width, height);
+            Win32WindowDimensions windowDimensions = Win32GetWindowDimensions(hwnd);
+            Win32CopyBufferToWindow(DeviceContext, windowDimensions.Width, windowDimensions.Height, globalBackbuffer);
 
             EndPaint(hwnd, &Paint);
         } break;
@@ -142,65 +151,63 @@ LRESULT CALLBACK Win32WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPa
     return Result;
 }
 
-static void Win32ResizeDIBSection(int width, int height) {
+static Win32BitmapBuffer Win32ResizeDIBSection(Win32BitmapBuffer buffer, int width, int height) {
     // TODO: Maybe dont free first, free after and then free first if it fails.
     
-    if (bitmapMemory) {
-        VirtualFree(bitmapMemory, 0, MEM_RELEASE);
+    if (buffer.Memory) {
+        VirtualFree(buffer.Memory, 0, MEM_RELEASE);
     }
 
-    bitmapWidth = width;
-    bitmapHeight = height;
+    buffer.Width = width;
+    buffer.Height = height;
 
-    bitmapInfo.bmiHeader.biSize             = sizeof(bitmapInfo.bmiHeader); 
-    bitmapInfo.bmiHeader.biWidth            = bitmapWidth;
-    bitmapInfo.bmiHeader.biHeight           = -bitmapHeight;
-    bitmapInfo.bmiHeader.biPlanes           = 1;
-    bitmapInfo.bmiHeader.biBitCount         = 32;
-    bitmapInfo.bmiHeader.biCompression      = BI_RGB;
+    buffer.Info.bmiHeader.biSize             = sizeof(buffer.Info.bmiHeader);
+    buffer.Info.bmiHeader.biWidth            = width;
+    buffer.Info.bmiHeader.biHeight           = -height;
+    buffer.Info.bmiHeader.biPlanes           = 1;
+    buffer.Info.bmiHeader.biBitCount         = 32;
+    buffer.Info.bmiHeader.biCompression      = BI_RGB;
     // bitmapInfo.bmiHeader.bisizeImage        = 0; 
     // bitmapInfo.bmiHeader.biXPelsPerMeter    = 0; 
     // bitmapInfo.bmiHeader.biYPelsPerMeter    = 0; 
     // bitmapInfo.bmiHeader.biClrUsed          = 0;
     // bitmapInfo.bmiHeader.biClrImport        = 0;
     
-    bytesPerPixel = 4;
-    int bitmapMemorySize = (bitmapWidth * bitmapHeight) * bytesPerPixel;
-    bitmapMemory = VirtualAlloc(0, bitmapMemorySize, MEM_COMMIT, PAGE_READWRITE);
+    buffer.BytesPerPixel = 4;
+    int bitmapMemorySize = (width * height) * buffer.BytesPerPixel;
+    buffer.Memory = VirtualAlloc(0, bitmapMemorySize, MEM_COMMIT, PAGE_READWRITE);
 
     // TODO: Clear screen to black?
+    
+    buffer.Pitch  = buffer.Width * buffer.BytesPerPixel;
+    return (buffer);
 }
 
-static void Win32UpdateWindow(HDC DeviceContext, RECT WindowRect, int x, int y, int width, int height) {
-    
-    int windowWidth     = WindowRect.right     - WindowRect.left;
-    int windowHeight    = WindowRect.bottom    - WindowRect.top;
-
+static void Win32CopyBufferToWindow(HDC DeviceContext, int windowWidth, int windowHeight, Win32BitmapBuffer buffer) {
     StretchDIBits(
         DeviceContext,
         /*x, y, width, height,        // This is the buffer we are drawing to.
         x, y, width, height, */       // This is the buffer we are drawing from.
-        0, 0, bitmapWidth, bitmapHeight,
+        0, 0, buffer.Width, buffer.Height,
         0, 0, windowWidth, windowHeight,
-        bitmapMemory,
-        &bitmapInfo,
+        buffer.Memory,
+        &buffer.Info,
         DIB_RGB_COLORS,             // Specifies the type of bitmap, in this case RGB color. Can also be set to DIB_PAL_COLORS.
         SRCCOPY                     // A bit-wise operation that specifies that we are copying from one bitmap to another. 
     );
 }
 
 
-static void RenderWeirdGradient(int xOffset, int yOffset) {
+static void RenderWeirdGradient(Win32BitmapBuffer buffer, int xOffset, int yOffset) {
     // Drawing Logic.
     
-    int      pitch  = bitmapWidth * bytesPerPixel;
-    uint8_t* row    = (uint8_t*) bitmapMemory;
+    uint8_t* row    = (uint8_t*)buffer.Memory;
 
-    for (int y = 0; y < bitmapHeight; ++y) {
+    for (int y = 0; y < buffer.Height; ++y) {
 
         uint32_t* pixel     = (uint32_t*)row;
 
-        for (int x = 0; x < bitmapWidth; ++x) {
+        for (int x = 0; x < buffer.Width; ++x) {
 
             uint8_t blue    = (uint8_t)(x + xOffset);       //blue channel
             uint8_t green   = (uint8_t)(0);                 //green channel
@@ -209,6 +216,6 @@ static void RenderWeirdGradient(int xOffset, int yOffset) {
             
             *pixel++ = ((red << 16) | (green << 8) | blue);
         }
-        row += pitch;
+        row += buffer.Pitch;
     }
 }
