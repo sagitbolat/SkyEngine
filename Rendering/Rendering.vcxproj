@@ -141,6 +141,9 @@
   <ItemGroup>
     <ClCompile Include="SkyWin32.cpp" />
   </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="SkyWin32.h" />
+  </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>

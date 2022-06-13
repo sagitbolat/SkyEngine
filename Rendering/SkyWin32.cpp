@@ -1,7 +1,8 @@
 #include <windows.h>
 
 #include <stdint.h>
-
+#include <Xinput.h>
+#include "SkyWin32.h"
 
 struct Win32BitmapBuffer {
     BITMAPINFO  Info;
@@ -24,14 +25,14 @@ inline Win32WindowDimensions Win32GetWindowDimensions(HWND hwnd) {
     return(Win32WindowDimensions{ width, height });
 }
 
-//  CONSTANTS
-const int BUFFER_WIDTH  = 1280;
-const int BUFFER_HEIGHT = 720;
 
+
+//  CONSTANTS
+const wchar_t CLASS_NAME[] = L"SkyEngineWindowClass";
 
 //  GLOBAL VARIABLES 
 // TODO: This is global for now.
-static bool Running;   
+static bool Running;   // TODO: Move outside engine code when moving the gameloop.
 static Win32BitmapBuffer globalBackbuffer = { };
 
 //  FORWARD FUNCTION DECLERATIONS
@@ -40,31 +41,59 @@ static  Win32BitmapBuffer   Win32ResizeDIBSection   (Win32BitmapBuffer buffer, i
 static  void                Win32CopyBufferToWindow (HDC DeviceContext, int windowWidth, int windowHeight, Win32BitmapBuffer buffer);
 static  void                RenderWeirdGradient     (Win32BitmapBuffer buffer, int xOffset, int yOffset);
 
+
+
+//the wWinMain is temporary. Move to different file
 int WINAPI wWinMain(
     _In_        HINSTANCE   hInstance,
     _In_opt_    HINSTANCE   hPrevInstance,
     _In_        LPWSTR      lpCmdLine,
     _In_        int         nCmdShow)
 {
+    HWND hwnd = { };
+    Win32InitWindow(hInstance, nCmdShow, &hwnd);
+
+    // Run the game loop.
+    // TODO: Replace later with a better loop.
+    Running = true;
+    int xOffset = 0;
+    int yOffset = 0;
+
+    while(Running) {
+        Win32ProcessMessageQueue();
+
+        //draw gradient
+        RenderWeirdGradient(globalBackbuffer, xOffset, yOffset);
+
+        Win32UpdateWindow(&hwnd);
+
+        ++xOffset;
+        ++yOffset;
+    }
+    return 0;
+}
+
+
+
+static HWND Win32InitWindow(HINSTANCE hInstance, int nCmdShow, HWND* hwnd) {
     // Register the window class.
-    const wchar_t CLASS_NAME[] = L"SkyEngineWindowClass";
 
     globalBackbuffer = Win32ResizeDIBSection(globalBackbuffer, BUFFER_WIDTH, BUFFER_HEIGHT);
 
     WNDCLASS wc = { };
 
-    wc.lpfnWndProc          = Win32WindowProc;
-    wc.hInstance            = hInstance;
-    wc.lpszClassName        = CLASS_NAME;
-    wc.style                = CS_VREDRAW | CS_HREDRAW;      // TODO: THIS MIGHT BE NOT NECESSARY
+    wc.lpfnWndProc = Win32WindowProc;
+    wc.hInstance = hInstance;
+    wc.lpszClassName = CLASS_NAME;
+    wc.style = CS_VREDRAW | CS_HREDRAW;      // TODO: THIS MIGHT BE NOT NECESSARY
     //wc.hIcon = TODO: Set the icon
 
-        
+
     // Register window class.
-    if (!RegisterClass(&wc)) return 1;      // TODO:  Log Windowclass register failure.
+    if (!RegisterClass(&wc)) return(0);      // TODO:  Log Windowclass register failure.
 
     // Create the window.
-    HWND hwnd = CreateWindowEx(
+    *hwnd = CreateWindowEx(
         0,              // Optional window styles.
         CLASS_NAME,     // Window class
         L"SkyApp",      // Window text
@@ -80,37 +109,28 @@ int WINAPI wWinMain(
         NULL            // Additional application data
     );
 
-    if (hwnd == NULL) return 1;     // TODO: Log windowhandler not defined.
+    if (*hwnd == NULL) return(0);     // TODO: Log windowhandler not defined.
 
-    ShowWindow(hwnd, nCmdShow);
-
-
-    // Run the game loop.
-    // TODO: Replace later with a better loop.
-    Running     = true;
-    int xOffset = 0;
-    int yOffset = 0;
-    while(Running) {
-
-        //Process Message Queue
-        MSG message = { };
-        while (PeekMessageW(&message, 0, 0, 0, PM_REMOVE)) {
-            TranslateMessage(&message);
-            DispatchMessage(&message);
-        }
-
-        //draw gradient
-        RenderWeirdGradient     (globalBackbuffer, xOffset, yOffset);
-        HDC DeviceContext       = GetDC(hwnd);
-        Win32WindowDimensions windowDimensions = Win32GetWindowDimensions(hwnd);
-        Win32CopyBufferToWindow (DeviceContext, windowDimensions.Width, windowDimensions.Height, globalBackbuffer);
-        ReleaseDC               (hwnd, DeviceContext);
-
-        ++xOffset;
-        ++yOffset;
-    }
-    return 0;
+    ShowWindow(*hwnd, nCmdShow);// Register the window class.
 }
+
+static void Win32ProcessMessageQueue() {
+    //Process Message Queue
+    MSG message = { };
+    while (PeekMessageW(&message, 0, 0, 0, PM_REMOVE)) {
+        TranslateMessage(&message);
+        DispatchMessage(&message);
+    }
+}
+
+static void Win32UpdateWindow(HWND *hwnd) {
+    HDC DeviceContext = GetDC(*hwnd);
+    Win32WindowDimensions windowDimensions = Win32GetWindowDimensions(*hwnd);
+    Win32CopyBufferToWindow(DeviceContext, windowDimensions.Width, windowDimensions.Height, globalBackbuffer);
+    ReleaseDC(*hwnd, DeviceContext);
+}
+
+
 
 LRESULT CALLBACK Win32WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     LRESULT Result = { };
