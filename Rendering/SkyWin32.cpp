@@ -1,23 +1,15 @@
-#include <windows.h>
-
-#include <stdint.h>
-#include <Xinput.h>
 #include "SkyWin32.h"
+#include <stdint.h>
 
-struct Win32BitmapBuffer {
-    BITMAPINFO  Info;
-    void*       Memory;
-    int         Width;
-    int         Height;
-    int         Pitch;
-    int         BytesPerPixel;
-};
+#include <xinput.h>
+#include <dsound.h>
 
+// NOTE: RECT operations
 struct Win32WindowDimensions {
     int Width;
     int Height;
 };
-inline Win32WindowDimensions Win32GetWindowDimensions(HWND hwnd) {
+static Win32WindowDimensions Win32GetWindowDimensions(HWND hwnd) {
     RECT windowRect = { };
     GetClientRect(hwnd, &windowRect);
     int width = windowRect.right - windowRect.left;
@@ -25,59 +17,120 @@ inline Win32WindowDimensions Win32GetWindowDimensions(HWND hwnd) {
     return(Win32WindowDimensions{ width, height });
 }
 
-
-
-//  CONSTANTS
+// SECTION: Constants
 const wchar_t CLASS_NAME[] = L"SkyEngineWindowClass";
 
-//  GLOBAL VARIABLES 
-// TODO: This is global for now.
-static bool Running;   // TODO: Move outside engine code when moving the gameloop.
-static Win32BitmapBuffer globalBackbuffer = { };
-
-//  FORWARD FUNCTION DECLERATIONS
+// SECTION: Forward function declarations
 LRESULT CALLBACK            Win32WindowProc         (HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 static  Win32BitmapBuffer   Win32ResizeDIBSection   (Win32BitmapBuffer buffer, int width, int height);
 static  void                Win32CopyBufferToWindow (HDC DeviceContext, int windowWidth, int windowHeight, Win32BitmapBuffer buffer);
-static  void                RenderWeirdGradient     (Win32BitmapBuffer buffer, int xOffset, int yOffset);
+static  void                RenderWeirdGradient     (Win32BitmapBuffer* buffer, int xOffset, int yOffset);
+static  void                Win32LoadXInput         ();
+static  void                Win32InitDirectSound    (HWND hwnd, int32_t samplesPerSecond, int32_t bufferSize);
+
+// SECTION: XInput library function declaration macros
+// NOTE: XInputGetState 
+#define X_INPUT_GET_STATE(name) DWORD WINAPI name(DWORD dwUserIndex, XINPUT_STATE* pState)
+typedef X_INPUT_GET_STATE(x_input_get_state);
+X_INPUT_GET_STATE(XInputGetStateStub) {
+    return(ERROR_DEVICE_NOT_CONNECTED);
+}
+static x_input_get_state* XInputGetState_ = XInputGetStateStub;
+#define XInputGetState XInputGetState_
+//NOTE: XInputSetState
+#define X_INPUT_SET_STATE(name) DWORD WINAPI name(DWORD dwUserIndex, XINPUT_VIBRATION* pVibration)
+typedef X_INPUT_SET_STATE(x_input_set_state);
+X_INPUT_SET_STATE(XInputSetStateStub) {
+    return(ERROR_DEVICE_NOT_CONNECTED);
+}
+static x_input_set_state* XInputSetState_ = XInputSetStateStub;
+#define XInputSetState XInputSetState_
+
+// SECTION: DirectSound library function declration macros
+#define DIRECT_SOUND_CREATE(name) HRESULT WINAPI name(LPCGUID pcGuidDevice, LPDIRECTSOUND* ppDS, LPUNKNOWN pUnkOuter)
+typedef DIRECT_SOUND_CREATE(direct_sound_create);
 
 
 
-//the wWinMain is temporary. Move to different file
-int WINAPI wWinMain(
-    _In_        HINSTANCE   hInstance,
-    _In_opt_    HINSTANCE   hPrevInstance,
-    _In_        LPWSTR      lpCmdLine,
-    _In_        int         nCmdShow)
-{
+// TODO: the wWinMain is temporary. Move to different file
+int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _In_ LPWSTR lpCmdLine, _In_ int nCmdShow) {
     HWND hwnd = { };
-    Win32InitWindow(hInstance, nCmdShow, &hwnd);
 
-    // Run the game loop.
+    // NOTE: Inits the window
+    Win32InitWindow(hInstance, nCmdShow, &hwnd);
+    
+    // NOTE: Loads XInput
+    Win32LoadXInput();
+    
+    // NOTE: Loads DirectSound
+    Win32InitDirectSound(hwnd, 48000, 48000 * sizeof(int16_t) * 2);
+
+    // NOTE: Run the game loop.
     // TODO: Replace later with a better loop.
     Running = true;
     int xOffset = 0;
     int yOffset = 0;
-
-    while(Running) {
+    
+    while (Running) {
+        // NOTE: Process Window messages 
         Win32ProcessMessageQueue();
+        
+        
+        // TODO: Move this out of gameloop into its own function?
+        // NOTE: Poll Xinput events. Should this be done more frequently?
+            // TODO: XInputGetState stalls if the controller is not plugged in so later on, change it to only poll active controllers.
+        for (DWORD controllerIndex = 0; controllerIndex < XUSER_MAX_COUNT; ++controllerIndex) {
+            XINPUT_STATE controller_state = { };
+            if(XInputGetState(controllerIndex, &controller_state) == ERROR_SUCCESS) {
+                // NOTE: This controller is plugged in.
+                // TODO: See if controller_state.dwPacketNumber increments too fast.
 
-        //draw gradient
-        RenderWeirdGradient(globalBackbuffer, xOffset, yOffset);
+                XINPUT_GAMEPAD* pad = &controller_state.Gamepad;
+                
+                bool up             = (pad->wButtons & XINPUT_GAMEPAD_DPAD_UP);
+                bool down           = (pad->wButtons & XINPUT_GAMEPAD_DPAD_DOWN);
+                bool left           = (pad->wButtons & XINPUT_GAMEPAD_DPAD_LEFT);
+                bool right          = (pad->wButtons & XINPUT_GAMEPAD_DPAD_RIGHT);
+                bool start          = (pad->wButtons & XINPUT_GAMEPAD_START);
+                bool back           = (pad->wButtons & XINPUT_GAMEPAD_BACK);
+                bool left_shoulder  = (pad->wButtons & XINPUT_GAMEPAD_LEFT_SHOULDER);
+                bool right_shoulder = (pad->wButtons & XINPUT_GAMEPAD_RIGHT_SHOULDER);
+                bool a_button       = (pad->wButtons & XINPUT_GAMEPAD_A);
+                bool b_button       = (pad->wButtons & XINPUT_GAMEPAD_B);
+                bool x_button       = (pad->wButtons & XINPUT_GAMEPAD_X);
+                bool y_button       = (pad->wButtons & XINPUT_GAMEPAD_Y);
+                
+                int16_t stick_left_x = pad->sThumbLX;
+                int16_t stick_left_y = pad->sThumbLY;
+                
+                // TODO: This is only for debugging purposes.
+                if (up    || y_button) { ++yOffset; }
+                if (down  || a_button) { --yOffset; }
+                if (left  || x_button) { ++xOffset; }
+                if (right || b_button) { --xOffset; }
+            } else {
+                // TODO: Handle unavailable controller if needed. Ex: tell user that controller is unplugged.
+            } 
+            // TODO: This is for debugging purposes.
+            // NOTE: Vibrates the first controller.
+            XINPUT_VIBRATION vibration = { };
+            // CODE: vibration.wLeftMotorSpeed  = 60000;
+            // CODE: vibration.wRightMotorSpeed = 60000;
+            XInputSetState(0, &vibration);
+        }
 
+        // NOTE: Draw gradient
+        RenderWeirdGradient(&globalBackbuffer, xOffset, yOffset);
+        
+        // NOTE: Upadte window graphics. 
         Win32UpdateWindow(&hwnd);
-
-        ++xOffset;
-        ++yOffset;
     }
     return 0;
 }
 
 
 
-static HWND Win32InitWindow(HINSTANCE hInstance, int nCmdShow, HWND* hwnd) {
-    // Register the window class.
-
+bool Win32InitWindow(HINSTANCE hInstance, int nCmdShow, HWND* hwnd) {
     globalBackbuffer = Win32ResizeDIBSection(globalBackbuffer, BUFFER_WIDTH, BUFFER_HEIGHT);
 
     WNDCLASS wc = { };
@@ -89,33 +142,35 @@ static HWND Win32InitWindow(HINSTANCE hInstance, int nCmdShow, HWND* hwnd) {
     //wc.hIcon = TODO: Set the icon
 
 
-    // Register window class.
+    // NOTE: Registers window class.
     if (!RegisterClass(&wc)) return(0);      // TODO:  Log Windowclass register failure.
 
-    // Create the window.
+    // NOTE: Creates the window.
     *hwnd = CreateWindowEx(
-        0,              // Optional window styles.
-        CLASS_NAME,     // Window class
-        L"SkyApp",      // Window text
+        0,              // NOTE: Optional window styles.
+        CLASS_NAME,     // NOTE: Window class
+        L"SkyApp",      // NOTE: Window text
 
-        WS_OVERLAPPEDWINDOW | WS_VISIBLE, // Window style
+        WS_OVERLAPPEDWINDOW | WS_VISIBLE, // NOTE: Window style
 
-        CW_USEDEFAULT, CW_USEDEFAULT,       // Position 
-        CW_USEDEFAULT, CW_USEDEFAULT,      // Size
+        CW_USEDEFAULT, CW_USEDEFAULT,       // NOTE: Position 
+        CW_USEDEFAULT, CW_USEDEFAULT,      // NOTE: Size
 
-        NULL,           // Parent window    
-        NULL,           // Menu
-        hInstance,      // Instance handle
-        NULL            // Additional application data
+        NULL,           // NOTE: Parent window    
+        NULL,           // NOTE: Menu
+        hInstance,      // NOTE: Instance handle
+        NULL            // NOTE: Additional application data
     );
 
     if (*hwnd == NULL) return(0);     // TODO: Log windowhandler not defined.
 
-    ShowWindow(*hwnd, nCmdShow);// Register the window class.
+    ShowWindow(*hwnd, nCmdShow);
+
+    return true;
 }
 
-static void Win32ProcessMessageQueue() {
-    //Process Message Queue
+void Win32ProcessMessageQueue() {
+    // NOTE: Processes Message Queue
     MSG message = { };
     while (PeekMessageW(&message, 0, 0, 0, PM_REMOVE)) {
         TranslateMessage(&message);
@@ -123,7 +178,7 @@ static void Win32ProcessMessageQueue() {
     }
 }
 
-static void Win32UpdateWindow(HWND *hwnd) {
+void Win32UpdateWindow(HWND *hwnd) {
     HDC DeviceContext = GetDC(*hwnd);
     Win32WindowDimensions windowDimensions = Win32GetWindowDimensions(*hwnd);
     Win32CopyBufferToWindow(DeviceContext, windowDimensions.Width, windowDimensions.Height, globalBackbuffer);
@@ -132,18 +187,156 @@ static void Win32UpdateWindow(HWND *hwnd) {
 
 
 
+static void Win32LoadXInput() {
+    // NOTE: Load XInput 1.4
+    HMODULE XInputLibrary = LoadLibrary(L"xinput1_4.dll");
+
+    // NOTE: if XInput 1.4 unavailable, load XInput 1.3 instead.
+    if (!XInputLibrary) { XInputLibrary = LoadLibrary(L"xinput1_3.dll"); }
+    
+    // NOTE: Set the GetState and SetState function pointers to point at the library functions.
+    if (XInputLibrary) {
+        XInputGetState = (x_input_get_state*) GetProcAddress(XInputLibrary, "XInputGetState");
+        XInputSetState = (x_input_set_state*) GetProcAddress(XInputLibrary, "XInputSetState");
+    } 
+}
+
+
+
+// TODO: change return type to bool to check for failures.
+static void Win32InitDirectSound(HWND hwnd, int32_t samplesPerSecond, int32_t bufferSize) {
+    
+    // SECTION: Load the library
+    
+    HMODULE directSoundLibrary = LoadLibrary(L"dsound.dll");
+    
+    if (!directSoundLibrary) { 
+        // NOTE: Direct Sound Library failed to load.
+        // TODO: Diagnostic
+        return;
+    }
+
+
+    // SECTION: Get a DirectSound Object
+    
+    direct_sound_create* DirectSoundCreate = (direct_sound_create*)GetProcAddress(directSoundLibrary, "DirectSoundCreate");        
+   
+    // NOTE: Direct sound object pointer 
+    LPDIRECTSOUND directSoundObj;
+    if (!DirectSoundCreate) {
+        // NOTE: DirectSoundCreate failed to initialize.
+        // TODO: Diagnostic
+        return;
+    }
+    if (!SUCCEEDED(DirectSoundCreate(0, &directSoundObj, 0))) {    // TODO: Check if this boolean is correct.
+        // NOTE: Direct Sound Object failed to create.
+        // TODO: Diagnostic
+        return;
+    }
+    if(!SUCCEEDED(directSoundObj->SetCooperativeLevel(hwnd, DSSCL_PRIORITY))) {
+        // NOTE: Failed to set format of audio.
+        // TODO: Diagnostic
+        return;
+    }
+    
+
+    // SECTION: Initalize Wave Format for the audio.
+
+    WAVEFORMATEX waveFormat = { };
+    waveFormat.wFormatTag = WAVE_FORMAT_PCM;
+    waveFormat.nChannels = 2;
+    waveFormat.nSamplesPerSec = samplesPerSecond;
+    waveFormat.wBitsPerSample = 16;
+    waveFormat.nBlockAlign = (waveFormat.nChannels * waveFormat.wBitsPerSample) / 8;
+    waveFormat.nAvgBytesPerSec = waveFormat.nSamplesPerSec * waveFormat.nBlockAlign;
+    waveFormat.cbSize = 0;
+
+
+    // SECTION: Create a primary buffer
+
+    DSBUFFERDESC bufferDescription = { };
+    bufferDescription.dwSize = sizeof(bufferDescription);
+    // TODO: DSBCAPS_GLOBALFOCUS ?
+    bufferDescription.dwFlags = DSBCAPS_PRIMARYBUFFER;
+
+    LPDIRECTSOUNDBUFFER primaryBuffer;
+
+    if(!SUCCEEDED(directSoundObj->CreateSoundBuffer(&bufferDescription, &primaryBuffer, 0))) {
+        // NOTE: Failed to create primary buffer.
+        // TODO: Diagnostic
+        return;
+    }
+    
+    if (!SUCCEEDED(primaryBuffer->SetFormat(&waveFormat))) {
+        // NOTE: Failed to set format of the primary buffer.
+        // TODO: Diagnostic 
+        return;
+    }
+    
+
+    // SECTION: Create a secondary buffer
+    
+    bufferDescription = { };
+    bufferDescription.dwSize = sizeof(bufferDescription);
+    bufferDescription.dwFlags = 0;
+    bufferDescription.dwBufferBytes = bufferSize;
+    bufferDescription.lpwfxFormat = &waveFormat;  
+    LPDIRECTSOUNDBUFFER secondaryBuffer;
+    if(!SUCCEEDED(directSoundObj->CreateSoundBuffer(&bufferDescription, &secondaryBuffer, 0))) {
+        // NOTE: Failed to create secondary buffer.
+        // TODO: Diagnostic.
+        return;
+    }
+}
+
+
+
+
 LRESULT CALLBACK Win32WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     LRESULT Result = { };
     switch (uMsg) {
-        case WM_SIZE: {
+        case WM_SYSKEYDOWN: {
+            uint32_t VKCode = wParam;
+            bool wasDown = ((lParam & (1 << 30)) != 0);     
+            bool isDown  = ((lParam & (1 << 30)) == 0); 
+            // TODO: Pass the info on key event to the game.
+
+            //NOTE: Makes the window close if alt f4 is pressed.
+            //NOTE: bool altKeyWasDown = ((lParam & (1 << 29)) != 0);
+            if (VKCode == VK_F4){
+                Running = false; // TODO: Make the game pop up with an "Are you sure you want to Quit?" message
+            }
         } break;
-        case WM_DESTROY: {
+        case WM_SYSKEYUP: {
+            uint32_t VKCode = wParam;
+            bool wasDown = ((lParam & (1 << 30)) != 0);     
+            bool isDown  = ((lParam & (1 << 30)) == 0); 
+            // TODO: Pass the info on key event to the game.
+        } break;
+        case WM_KEYDOWN: {
+            uint32_t VKCode = wParam;
+            bool wasDown = ((lParam & (1 << 30)) != 0);     
+            bool isDown  = ((lParam & (1 << 30)) == 0); 
+            // TODO: Pass the info on key event to the game.
+        } break;
+        case WM_KEYUP: {
+            uint32_t VKCode = wParam;
+            bool wasDown = ((lParam & (1 << 30)) != 0);     
+            bool isDown  = ((lParam & (1 << 30)) == 0); 
+            // TODO: Pass the info on key event to the game.
+        } break;
+        
+        case WM_SIZE: {
             
+        } break;
+
+        case WM_DESTROY: {
             // TODO: Handle as an error if Running is true and recreate window.
             Running = false;
             OutputDebugStringA("DESTROY\n");
             return 0;
         } break;
+
         case WM_CLOSE: {
 
             // TODO: Give the user an "Are you sure you want to quit?" message.
@@ -151,9 +344,11 @@ LRESULT CALLBACK Win32WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPa
 
             OutputDebugStringA("CLOSE\n");
         } break;
+
         case WM_ACTIVATEAPP: {
             OutputDebugStringA("ACTIVATEAPP\n");
         } break;
+
         case WM_PAINT: {
             PAINTSTRUCT Paint;
             HDC DeviceContext = BeginPaint(hwnd, &Paint);
@@ -168,8 +363,8 @@ LRESULT CALLBACK Win32WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPa
 
             EndPaint(hwnd, &Paint);
         } break;
+
         default: {
-//            OutputDebugStringA("default\n");
             Result = DefWindowProc(hwnd, uMsg, wParam, lParam);
         } break;
     }
@@ -192,11 +387,6 @@ static Win32BitmapBuffer Win32ResizeDIBSection(Win32BitmapBuffer buffer, int wid
     buffer.Info.bmiHeader.biPlanes           = 1;
     buffer.Info.bmiHeader.biBitCount         = 32;
     buffer.Info.bmiHeader.biCompression      = BI_RGB;
-    // bitmapInfo.bmiHeader.bisizeImage        = 0; 
-    // bitmapInfo.bmiHeader.biXPelsPerMeter    = 0; 
-    // bitmapInfo.bmiHeader.biYPelsPerMeter    = 0; 
-    // bitmapInfo.bmiHeader.biClrUsed          = 0;
-    // bitmapInfo.bmiHeader.biClrImport        = 0;
     
     buffer.BytesPerPixel = 4;
     int bitmapMemorySize = (width * height) * buffer.BytesPerPixel;
@@ -213,36 +403,35 @@ static void Win32CopyBufferToWindow(HDC DeviceContext, int windowWidth, int wind
 
     StretchDIBits(
         DeviceContext,
-        /*x, y, width, height,        // This is the buffer we are drawing to.
-        x, y, width, height, */       // This is the buffer we are drawing from.
-        0, 0, windowWidth, windowHeight,
-        0, 0, buffer.Width, buffer.Height,
+        0, 0, windowWidth, windowHeight,    //NOTE: This is the buffer we are drawing to.
+        0, 0, buffer.Width, buffer.Height,  //NOTE: This is the buffer we are dwaring from
         buffer.Memory,
         &buffer.Info,
-        DIB_RGB_COLORS,             // Specifies the type of bitmap, in this case RGB color. Can also be set to DIB_PAL_COLORS.
-        SRCCOPY                     // A bit-wise operation that specifies that we are copying from one bitmap to another. 
+        DIB_RGB_COLORS,             // NOTE: Specifies the type of bitmap, in this case RGB color. Can also be set to DIB_PAL_COLORS.
+        SRCCOPY                     // NOTE: A bit-wise operation that specifies that we are copying from one bitmap to another. 
     );
 }
 
 
-static void RenderWeirdGradient(Win32BitmapBuffer buffer, int xOffset, int yOffset) {
-    // Drawing Logic.
-    
-    uint8_t* row    = (uint8_t*)buffer.Memory;
 
-    for (int y = 0; y < buffer.Height; ++y) {
+static void RenderWeirdGradient(Win32BitmapBuffer* buffer, int xOffset, int yOffset) {
+    // NOTE: Drawing Logic.
 
-        uint32_t* pixel     = (uint32_t*)row;
+    uint8_t* row = (uint8_t*)buffer->Memory;
 
-        for (int x = 0; x < buffer.Width; ++x) {
+    for (int y = 0; y < buffer->Height; ++y) {
 
-            uint8_t blue    = (uint8_t)(x + xOffset);       //blue channel
-            uint8_t green   = (uint8_t)(0);                 //green channel
-            uint8_t red     = (uint8_t)(y + yOffset);       //red channel
-            
-            
+        uint32_t* pixel = (uint32_t*)row;
+
+        for (int x = 0; x < buffer->Width; ++x) {
+
+            uint8_t blue = (uint8_t)(x + xOffset);       // NOTE: Blue channel
+            uint8_t green = (uint8_t)(0);                 // NOTE: Green channel
+            uint8_t red = (uint8_t)(y + yOffset);       // NOTE: Red channel
+
+
             *pixel++ = ((red << 16) | (green << 8) | blue);
         }
-        row += buffer.Pitch;
+        row += buffer->Pitch;
     }
 }
