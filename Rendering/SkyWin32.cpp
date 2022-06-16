@@ -1,8 +1,12 @@
+
+
+
 #include "SkyWin32.h"
 #include <stdint.h>
 
 #include <xinput.h>
 #include <dsound.h>
+
 
 // NOTE: RECT operations
 struct Win32WindowDimensions {
@@ -20,6 +24,9 @@ static Win32WindowDimensions Win32GetWindowDimensions(HWND hwnd) {
 // SECTION: Constants
 const wchar_t CLASS_NAME[] = L"SkyEngineWindowClass";
 
+// SECTION: Globals
+LPDIRECTSOUNDBUFFER globalSecondaryBuffer;
+
 // SECTION: Forward function declarations
 LRESULT CALLBACK            Win32WindowProc         (HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 static  Win32BitmapBuffer   Win32ResizeDIBSection   (Win32BitmapBuffer buffer, int width, int height);
@@ -27,6 +34,7 @@ static  void                Win32CopyBufferToWindow (HDC DeviceContext, int wind
 static  void                RenderWeirdGradient     (Win32BitmapBuffer* buffer, int xOffset, int yOffset);
 static  void                Win32LoadXInput         ();
 static  void                Win32InitDirectSound    (HWND hwnd, int32_t samplesPerSecond, int32_t bufferSize);
+static  void                WriteSquareWave         (int runningSampleIndex, int squareWavePeriod, int bytesPerSample, int secondaryBufferSize, int volume);                
 
 // SECTION: XInput library function declaration macros
 // NOTE: XInputGetState 
@@ -63,7 +71,11 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, 
     Win32LoadXInput();
     
     // NOTE: Loads DirectSound
-    Win32InitDirectSound(hwnd, 48000, 48000 * sizeof(int16_t) * 2);
+    int samplesPerSecond = 48000;
+    int bytesPerSample = sizeof(int16_t) * 2;
+    int secondaryBufferSize = samplesPerSecond * bytesPerSample;
+    Win32InitDirectSound(hwnd, samplesPerSecond, secondaryBufferSize);
+    bool soundIsPlaying = false;
 
     // NOTE: Run the game loop.
     // TODO: Replace later with a better loop.
@@ -71,6 +83,14 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, 
     int xOffset = 0;
     int yOffset = 0;
     
+    // NOTE: This is for the Square wave sound.
+    // TODO: Remove later
+    uint32_t runningSampleIndex = 0;
+    int hz = 256;
+    int volume = 100;
+    int squareWavePeriod = samplesPerSecond / hz;
+
+
     while (Running) {
         // NOTE: Process Window messages 
         Win32ProcessMessageQueue();
@@ -120,9 +140,20 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, 
         }
 
         // NOTE: Draw gradient
+        // TODO: Delete this when rendering an actual game.
         RenderWeirdGradient(&globalBackbuffer, xOffset, yOffset);
         
-        // NOTE: Upadte window graphics. 
+        // NOTE: Directsound output square wave
+        // TODO: Delete this when playing actual game sound.
+        WriteSquareWave(runningSampleIndex, squareWavePeriod, bytesPerSample, secondaryBufferSize, volume);
+
+        // NOTE: if sound isn't playing, start playing.
+        if (!soundIsPlaying) {
+            globalSecondaryBuffer->Play(0, 0, DSBPLAY_LOOPING);
+            soundIsPlaying = true;
+        }
+
+        // NOTE: Update window graphics. 
         Win32UpdateWindow(&hwnd);
     }
     return 0;
@@ -205,7 +236,6 @@ static void Win32LoadXInput() {
 
 // TODO: change return type to bool to check for failures.
 static void Win32InitDirectSound(HWND hwnd, int32_t samplesPerSecond, int32_t bufferSize) {
-    
     // SECTION: Load the library
     
     HMODULE directSoundLibrary = LoadLibrary(L"dsound.dll");
@@ -281,8 +311,7 @@ static void Win32InitDirectSound(HWND hwnd, int32_t samplesPerSecond, int32_t bu
     bufferDescription.dwFlags = 0;
     bufferDescription.dwBufferBytes = bufferSize;
     bufferDescription.lpwfxFormat = &waveFormat;  
-    LPDIRECTSOUNDBUFFER secondaryBuffer;
-    if(!SUCCEEDED(directSoundObj->CreateSoundBuffer(&bufferDescription, &secondaryBuffer, 0))) {
+    if(!SUCCEEDED(directSoundObj->CreateSoundBuffer(&bufferDescription, &globalSecondaryBuffer, 0))) {
         // NOTE: Failed to create secondary buffer.
         // TODO: Diagnostic.
         return;
@@ -433,5 +462,75 @@ static void RenderWeirdGradient(Win32BitmapBuffer* buffer, int xOffset, int yOff
             *pixel++ = ((red << 16) | (green << 8) | blue);
         }
         row += buffer->Pitch;
+    }
+}
+
+
+
+static void WriteSquareWave(int runningSampleIndex, int squareWavePeriod, int bytesPerSample, int secondaryBufferSize, int volume) {
+   
+    // NOTE: Direct Sound output tests.
+    
+    int halfSquareWavePeriod = squareWavePeriod / 2;
+
+    DWORD playCursor;
+    DWORD writeCursor;
+
+    if (!SUCCEEDED(globalSecondaryBuffer->GetCurrentPosition(&playCursor, &writeCursor))) {
+        // NOTE: Current buffer did not exist.
+        // TODO: Diagnostic
+        OutputDebugString(L"DEBUG: Current buffer did not exist \n");
+    }
+    
+    DWORD byteToLock = runningSampleIndex * bytesPerSample % secondaryBufferSize;
+    DWORD bytesToWrite; 
+    if (byteToLock == playCursor) {
+        bytesToWrite = secondaryBufferSize;
+    } else if (byteToLock > playCursor) {
+        bytesToWrite = (secondaryBufferSize - byteToLock);        
+        bytesToWrite += playCursor;
+    } else {
+        bytesToWrite = playCursor - byteToLock;
+    }
+
+    // NOTE: The two buffer regions.
+    VOID* region1;
+    DWORD region1Size;
+    VOID* region2;
+    DWORD region2Size;
+    
+    if (!SUCCEEDED(globalSecondaryBuffer->Lock(
+            byteToLock,
+            bytesToWrite,
+            &region1, &region1Size,
+            &region2, &region2Size,
+            0))) {
+        // NOTE: Locking buffer did not succeed.
+        // TODO: Diagnostic
+        OutputDebugString(L"DEBUG: Locking buffer did not succeed. \n");
+    } 
+    
+    // TODO: assert that region sizes are valid.
+    
+    DWORD region1SampleCount = region1Size/bytesPerSample;
+    int16_t* sampleOut = (int16_t*)region1;
+    for(DWORD sampleIndex = 0; sampleIndex < region1SampleCount; ++sampleIndex) {
+        int16_t sampleValue = ((runningSampleIndex++ / halfSquareWavePeriod) % 2) ? volume : -volume;
+        *sampleOut++ = sampleValue;
+        *sampleOut++ = sampleValue;
+    }
+
+    DWORD region2SampleCount = region2Size/bytesPerSample;
+    sampleOut = (int16_t*)region2;
+    for(DWORD sampleIndex = 0; sampleIndex < region2SampleCount; ++sampleIndex) {
+        int16_t sampleValue = ((runningSampleIndex++ / halfSquareWavePeriod) % 2) ? volume : -volume;
+        *sampleOut++ = sampleValue;
+        *sampleOut++ = sampleValue;
+    }
+
+    if (!SUCCEEDED(globalSecondaryBuffer->Unlock(region1, region1Size, region2, region2Size))) {
+        // NOTE: Unlocking buffer did not succeed.
+        // TODO: Diagnostic
+        OutputDebugString(L"DEBUG: Unlocking buffer did not succeed \n");
     }
 }

@@ -1,5 +1,4 @@
 #pragma once
-
 #include <windows.h>
 
 struct Win32BitmapBuffer {
@@ -11,7 +10,7 @@ struct Win32BitmapBuffer {
     int         BytesPerPixel;
 };
 
-//  CONSTANTS
+// SECTION: CONSTANTS
 const int BUFFER_WIDTH = 1280;
 const int BUFFER_HEIGHT = 720;
 
@@ -19,7 +18,7 @@ const int BUFFER_HEIGHT = 720;
 static bool Running;
 static Win32BitmapBuffer globalBackbuffer = { };
 
-//	FUNCTIONS
+// SECTION:	FUNCTIONS
 bool Win32InitWindow(HINSTANCE hInstance, int nCmdShow, HWND* hwnd);
 void Win32ProcessMessageQueue();
 void Win32UpdateWindow(HWND* hwnd);
