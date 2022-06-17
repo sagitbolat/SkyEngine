@@ -7,6 +7,13 @@
 #include <xinput.h>
 #include <dsound.h>
 
+// TODO: Remove this at some point and implement trig functions myself.
+#include <math.h>
+
+#define PI32 3.14159265
+
+
+// SECTION: param structs.
 
 // NOTE: RECT operations
 struct Win32WindowDimensions {
@@ -21,6 +28,17 @@ static Win32WindowDimensions Win32GetWindowDimensions(HWND hwnd) {
     return(Win32WindowDimensions{ width, height });
 }
 
+// NOTE: SoundParamStruct
+struct Win32SoundOutput {
+    int     samplesPerSecond;
+    int     toneHz;
+    int16_t toneVolume;
+    uint32_t runningSampleIndex;
+    int     wavePeriod;
+    int     bytesPerSample;
+    int     secondaryBufferSize;
+};
+
 // SECTION: Constants
 const wchar_t CLASS_NAME[] = L"SkyEngineWindowClass";
 
@@ -34,8 +52,8 @@ static  void                Win32CopyBufferToWindow (HDC DeviceContext, int wind
 static  void                RenderWeirdGradient     (Win32BitmapBuffer* buffer, int xOffset, int yOffset);
 static  void                Win32LoadXInput         ();
 static  void                Win32InitDirectSound    (HWND hwnd, int32_t samplesPerSecond, int32_t bufferSize);
-static  void                WriteSquareWave         (int runningSampleIndex, int squareWavePeriod, int bytesPerSample, int secondaryBufferSize, int volume);                
-
+static  void                WriteSineWave           (Win32SoundOutput* soundOutput); 
+static  void                Win32FillSoundBuffer    (Win32SoundOutput* soundOutput, DWORD byteToLock, DWORD bytesToWrite);
 // SECTION: XInput library function declaration macros
 // NOTE: XInputGetState 
 #define X_INPUT_GET_STATE(name) DWORD WINAPI name(DWORD dwUserIndex, XINPUT_STATE* pState)
@@ -59,7 +77,6 @@ static x_input_set_state* XInputSetState_ = XInputSetStateStub;
 typedef DIRECT_SOUND_CREATE(direct_sound_create);
 
 
-
 // TODO: the wWinMain is temporary. Move to different file
 int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _In_ LPWSTR lpCmdLine, _In_ int nCmdShow) {
     HWND hwnd = { };
@@ -70,13 +87,23 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, 
     // NOTE: Loads XInput
     Win32LoadXInput();
     
-    // NOTE: Loads DirectSound
-    int samplesPerSecond = 48000;
-    int bytesPerSample = sizeof(int16_t) * 2;
-    int secondaryBufferSize = samplesPerSecond * bytesPerSample;
-    Win32InitDirectSound(hwnd, samplesPerSecond, secondaryBufferSize);
-    bool soundIsPlaying = false;
+    // NOTE: Loads sound buffer output defaults
+    Win32SoundOutput soundOutput = { };
+    soundOutput.samplesPerSecond = 48000; 
+    soundOutput.toneHz = 256;
+    soundOutput.toneVolume = 1000;
+    soundOutput.runningSampleIndex = 0;
+    soundOutput.wavePeriod = soundOutput.samplesPerSecond / soundOutput.toneHz;
+    soundOutput.bytesPerSample = sizeof(int16_t) * 2;
+    soundOutput.secondaryBufferSize = soundOutput.samplesPerSecond * soundOutput.bytesPerSample;
 
+    // NOTE: Loads DirectSound
+    Win32InitDirectSound(hwnd, soundOutput.samplesPerSecond, soundOutput.secondaryBufferSize);
+    Win32FillSoundBuffer(&soundOutput, 0, soundOutput.secondaryBufferSize);
+    globalSecondaryBuffer->Play(0, 0, DSBPLAY_LOOPING);
+
+//    bool soundIsPlaying = false;
+    
     // NOTE: Run the game loop.
     // TODO: Replace later with a better loop.
     Running = true;
@@ -86,9 +113,6 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, 
     // NOTE: This is for the Square wave sound.
     // TODO: Remove later
     uint32_t runningSampleIndex = 0;
-    int hz = 256;
-    int volume = 100;
-    int squareWavePeriod = samplesPerSecond / hz;
 
 
     while (Running) {
@@ -145,13 +169,7 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, 
         
         // NOTE: Directsound output square wave
         // TODO: Delete this when playing actual game sound.
-        WriteSquareWave(runningSampleIndex, squareWavePeriod, bytesPerSample, secondaryBufferSize, volume);
-
-        // NOTE: if sound isn't playing, start playing.
-        if (!soundIsPlaying) {
-            globalSecondaryBuffer->Play(0, 0, DSBPLAY_LOOPING);
-            soundIsPlaying = true;
-        }
+        WriteSineWave(&soundOutput);
 
         // NOTE: Update window graphics. 
         Win32UpdateWindow(&hwnd);
@@ -443,6 +461,58 @@ static void Win32CopyBufferToWindow(HDC DeviceContext, int windowWidth, int wind
 
 
 
+static void Win32FillSoundBuffer(Win32SoundOutput* soundOutput, DWORD byteToLock, DWORD bytesToWrite) {
+    // NOTE: The two buffer regions.
+    VOID* region1;
+    DWORD region1Size;
+    VOID* region2;
+    DWORD region2Size;
+    
+    if (!SUCCEEDED(globalSecondaryBuffer->Lock(
+            byteToLock,
+            bytesToWrite,
+            &region1, &region1Size,
+            &region2, &region2Size,
+            0))) {
+        // NOTE: Locking buffer did not succeed.
+        // TODO: Diagnostic
+        OutputDebugString(L"DEBUG: Locking buffer did not succeed. \n");
+    } 
+    
+    // TODO: assert that region sizes are valid.
+    
+    DWORD region1SampleCount = region1Size / soundOutput->bytesPerSample;
+    int16_t* sampleOut = (int16_t*)region1;
+    for(DWORD sampleIndex = 0; sampleIndex < region1SampleCount; ++sampleIndex) {
+        float t = 2.0f * PI32 * (float)soundOutput->runningSampleIndex / (float)soundOutput->wavePeriod;
+        float sineValue = sinf(t);
+        int16_t sampleValue = (int16_t)(sineValue * soundOutput->toneVolume);
+        *sampleOut++ = sampleValue;
+        *sampleOut++ = sampleValue;
+        ++(soundOutput->runningSampleIndex);
+    }
+
+    DWORD region2SampleCount = region2Size / soundOutput->bytesPerSample;
+    sampleOut = (int16_t*)region2;
+    for(DWORD sampleIndex = 0; sampleIndex < region2SampleCount; ++sampleIndex) {
+        float t = 2.0f * PI32 * (float)soundOutput->runningSampleIndex / (float)soundOutput->wavePeriod;
+        float sineValue = sinf(t);
+        int16_t sampleValue = (int16_t)(sineValue * soundOutput->toneVolume);
+        *sampleOut++ = sampleValue;
+        *sampleOut++ = sampleValue;
+        ++(soundOutput->runningSampleIndex);
+    }
+
+    if (!SUCCEEDED(globalSecondaryBuffer->Unlock(region1, region1Size, region2, region2Size))) {
+        // NOTE: Unlocking buffer did not succeed.
+        // TODO: Diagnostic
+        OutputDebugString(L"DEBUG: Unlocking buffer did not succeed \n");
+    }
+}
+
+
+
+// NOTE: This is testing code.
 static void RenderWeirdGradient(Win32BitmapBuffer* buffer, int xOffset, int yOffset) {
     // NOTE: Drawing Logic.
 
@@ -466,12 +536,12 @@ static void RenderWeirdGradient(Win32BitmapBuffer* buffer, int xOffset, int yOff
 }
 
 
-
-static void WriteSquareWave(int runningSampleIndex, int squareWavePeriod, int bytesPerSample, int secondaryBufferSize, int volume) {
+// NOTE: This is testing code.
+static void WriteSineWave(Win32SoundOutput* soundOutput) {
    
     // NOTE: Direct Sound output tests.
     
-    int halfSquareWavePeriod = squareWavePeriod / 2;
+    int halfSquareWavePeriod = soundOutput->wavePeriod / 2;
 
     DWORD playCursor;
     DWORD writeCursor;
@@ -482,55 +552,17 @@ static void WriteSquareWave(int runningSampleIndex, int squareWavePeriod, int by
         OutputDebugString(L"DEBUG: Current buffer did not exist \n");
     }
     
-    DWORD byteToLock = runningSampleIndex * bytesPerSample % secondaryBufferSize;
-    DWORD bytesToWrite; 
+    DWORD byteToLock = (soundOutput->runningSampleIndex * soundOutput->bytesPerSample) % soundOutput->secondaryBufferSize;
+    DWORD bytesToWrite;
+
+    // TODO: We should probably not write the length of the whole buffer in order to lower the latency.
     if (byteToLock == playCursor) {
-        bytesToWrite = secondaryBufferSize;
+        bytesToWrite = 0;
     } else if (byteToLock > playCursor) {
-        bytesToWrite = (secondaryBufferSize - byteToLock);        
+        bytesToWrite = (soundOutput->secondaryBufferSize - byteToLock);        
         bytesToWrite += playCursor;
     } else {
         bytesToWrite = playCursor - byteToLock;
     }
-
-    // NOTE: The two buffer regions.
-    VOID* region1;
-    DWORD region1Size;
-    VOID* region2;
-    DWORD region2Size;
-    
-    if (!SUCCEEDED(globalSecondaryBuffer->Lock(
-            byteToLock,
-            bytesToWrite,
-            &region1, &region1Size,
-            &region2, &region2Size,
-            0))) {
-        // NOTE: Locking buffer did not succeed.
-        // TODO: Diagnostic
-        OutputDebugString(L"DEBUG: Locking buffer did not succeed. \n");
-    } 
-    
-    // TODO: assert that region sizes are valid.
-    
-    DWORD region1SampleCount = region1Size/bytesPerSample;
-    int16_t* sampleOut = (int16_t*)region1;
-    for(DWORD sampleIndex = 0; sampleIndex < region1SampleCount; ++sampleIndex) {
-        int16_t sampleValue = ((runningSampleIndex++ / halfSquareWavePeriod) % 2) ? volume : -volume;
-        *sampleOut++ = sampleValue;
-        *sampleOut++ = sampleValue;
-    }
-
-    DWORD region2SampleCount = region2Size/bytesPerSample;
-    sampleOut = (int16_t*)region2;
-    for(DWORD sampleIndex = 0; sampleIndex < region2SampleCount; ++sampleIndex) {
-        int16_t sampleValue = ((runningSampleIndex++ / halfSquareWavePeriod) % 2) ? volume : -volume;
-        *sampleOut++ = sampleValue;
-        *sampleOut++ = sampleValue;
-    }
-
-    if (!SUCCEEDED(globalSecondaryBuffer->Unlock(region1, region1Size, region2, region2Size))) {
-        // NOTE: Unlocking buffer did not succeed.
-        // TODO: Diagnostic
-        OutputDebugString(L"DEBUG: Unlocking buffer did not succeed \n");
-    }
+    Win32FillSoundBuffer(soundOutput, byteToLock, bytesToWrite);
 }
