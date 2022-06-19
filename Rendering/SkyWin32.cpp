@@ -51,6 +51,7 @@ static  Win32BitmapBuffer   Win32ResizeDIBSection   (Win32BitmapBuffer buffer, i
 static  void                Win32CopyBufferToWindow (HDC DeviceContext, int windowWidth, int windowHeight, Win32BitmapBuffer buffer);
 static  void                RenderWeirdGradient     (Win32BitmapBuffer* buffer, int xOffset, int yOffset);
 static  void                Win32LoadXInput         ();
+static  void                Win32PollXInput         ();
 static  void                Win32InitDirectSound    (HWND hwnd, int32_t samplesPerSecond, int32_t bufferSize);
 static  void                WriteSineWave           (Win32SoundOutput* soundOutput); 
 static  void                Win32FillSoundBuffer    (Win32SoundOutput* soundOutput, DWORD byteToLock, DWORD bytesToWrite);
@@ -114,54 +115,28 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, 
     // TODO: Remove later
     uint32_t runningSampleIndex = 0;
 
+    // TIMER: Keep track of full frame wall-clock timer.
+    LARGE_INTEGER timer_frequency;
+    QueryPerformanceFrequency(&timer_frequency);
+    LARGE_INTEGER previous_timer;
+    QueryPerformanceCounter(&previous_timer);
 
     while (Running) {
+        
         // NOTE: Process Window messages 
         Win32ProcessMessageQueue();
         
-        
-        // TODO: Move this out of gameloop into its own function?
         // NOTE: Poll Xinput events. Should this be done more frequently?
-            // TODO: XInputGetState stalls if the controller is not plugged in so later on, change it to only poll active controllers.
-        for (DWORD controllerIndex = 0; controllerIndex < XUSER_MAX_COUNT; ++controllerIndex) {
-            XINPUT_STATE controller_state = { };
-            if(XInputGetState(controllerIndex, &controller_state) == ERROR_SUCCESS) {
-                // NOTE: This controller is plugged in.
-                // TODO: See if controller_state.dwPacketNumber increments too fast.
+        // TODO: XInputGetState stalls if the controller is not plugged in so later on, 
+        //       change it to only poll active controllers.
+        Win32PollXInput();
 
-                XINPUT_GAMEPAD* pad = &controller_state.Gamepad;
-                
-                bool up             = (pad->wButtons & XINPUT_GAMEPAD_DPAD_UP);
-                bool down           = (pad->wButtons & XINPUT_GAMEPAD_DPAD_DOWN);
-                bool left           = (pad->wButtons & XINPUT_GAMEPAD_DPAD_LEFT);
-                bool right          = (pad->wButtons & XINPUT_GAMEPAD_DPAD_RIGHT);
-                bool start          = (pad->wButtons & XINPUT_GAMEPAD_START);
-                bool back           = (pad->wButtons & XINPUT_GAMEPAD_BACK);
-                bool left_shoulder  = (pad->wButtons & XINPUT_GAMEPAD_LEFT_SHOULDER);
-                bool right_shoulder = (pad->wButtons & XINPUT_GAMEPAD_RIGHT_SHOULDER);
-                bool a_button       = (pad->wButtons & XINPUT_GAMEPAD_A);
-                bool b_button       = (pad->wButtons & XINPUT_GAMEPAD_B);
-                bool x_button       = (pad->wButtons & XINPUT_GAMEPAD_X);
-                bool y_button       = (pad->wButtons & XINPUT_GAMEPAD_Y);
-                
-                int16_t stick_left_x = pad->sThumbLX;
-                int16_t stick_left_y = pad->sThumbLY;
-                
-                // TODO: This is only for debugging purposes.
-                if (up    || y_button) { ++yOffset; }
-                if (down  || a_button) { --yOffset; }
-                if (left  || x_button) { ++xOffset; }
-                if (right || b_button) { --xOffset; }
-            } else {
-                // TODO: Handle unavailable controller if needed. Ex: tell user that controller is unplugged.
-            } 
-            // TODO: This is for debugging purposes.
-            // NOTE: Vibrates the first controller.
-            XINPUT_VIBRATION vibration = { };
-            // CODE: vibration.wLeftMotorSpeed  = 60000;
-            // CODE: vibration.wRightMotorSpeed = 60000;
-            XInputSetState(0, &vibration);
-        }
+        // TODO: This is for debugging purposes.
+        // NOTE: Vibrates the first controller.
+        XINPUT_VIBRATION vibration = { };
+        vibration.wLeftMotorSpeed  = 3000;
+        vibration.wRightMotorSpeed = 3000;
+        XInputSetState(0, &vibration);
 
         // NOTE: Draw gradient
         // TODO: Delete this when rendering an actual game.
@@ -173,6 +148,16 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, 
 
         // NOTE: Update window graphics. 
         Win32UpdateWindow(&hwnd);
+        
+        // TIMER: End the full frame wall-clock timer.
+        LARGE_INTEGER end_timer;
+        QueryPerformanceCounter(&end_timer);
+        // NOTE: Print timer elapsed.
+        int32_t elapsed_milliseconds = (1000) * (end_timer.QuadPart - previous_timer.QuadPart) / timer_frequency.QuadPart;
+        previous_timer = end_timer;
+        char buffer[256];
+        wsprintfA(buffer, "Milliseconds/frame: %dms \n", elapsed_milliseconds);
+        OutputDebugStringA(buffer); 
     }
     return 0;
 }
@@ -248,6 +233,45 @@ static void Win32LoadXInput() {
         XInputGetState = (x_input_get_state*) GetProcAddress(XInputLibrary, "XInputGetState");
         XInputSetState = (x_input_set_state*) GetProcAddress(XInputLibrary, "XInputSetState");
     } 
+}
+
+static void Win32PollXInput() {
+    for (DWORD controllerIndex = 0; controllerIndex < XUSER_MAX_COUNT; ++controllerIndex) {
+        XINPUT_STATE controller_state = { };
+        if (XInputGetState(controllerIndex, &controller_state) == ERROR_SUCCESS) {
+            // NOTE: This controller is plugged in.
+            // TODO: See if controller_state.dwPacketNumber increments too fast.
+
+            // NOTE: get the gamepad struct from controller_state
+            XINPUT_GAMEPAD* pad = &controller_state.Gamepad;
+
+            // NOTE: Get inputs.
+            bool up = (pad->wButtons & XINPUT_GAMEPAD_DPAD_UP);
+            bool down = (pad->wButtons & XINPUT_GAMEPAD_DPAD_DOWN);
+            bool left = (pad->wButtons & XINPUT_GAMEPAD_DPAD_LEFT);
+            bool right = (pad->wButtons & XINPUT_GAMEPAD_DPAD_RIGHT);
+            bool start = (pad->wButtons & XINPUT_GAMEPAD_START);
+            bool back = (pad->wButtons & XINPUT_GAMEPAD_BACK);
+            bool left_shoulder = (pad->wButtons & XINPUT_GAMEPAD_LEFT_SHOULDER);
+            bool right_shoulder = (pad->wButtons & XINPUT_GAMEPAD_RIGHT_SHOULDER);
+            bool a_button = (pad->wButtons & XINPUT_GAMEPAD_A);
+            bool b_button = (pad->wButtons & XINPUT_GAMEPAD_B);
+            bool x_button = (pad->wButtons & XINPUT_GAMEPAD_X);
+            bool y_button = (pad->wButtons & XINPUT_GAMEPAD_Y);
+
+            int16_t stick_left_x = pad->sThumbLX;
+            int16_t stick_left_y = pad->sThumbLY;
+
+            // TODO: This is only for debugging purposes.
+            /*if (up || y_button) { ++yOffset; }
+            if (down || a_button) { --yOffset; }
+            if (left || x_button) { ++xOffset; }
+            if (right || b_button) { --xOffset; }*/
+        }
+        else {
+            // TODO: Handle unavailable controller if needed. Ex: tell user that controller is unplugged.
+        }
+    }
 }
 
 
@@ -468,15 +492,15 @@ static void Win32FillSoundBuffer(Win32SoundOutput* soundOutput, DWORD byteToLock
     VOID* region2;
     DWORD region2Size;
     
-    if (!SUCCEEDED(globalSecondaryBuffer->Lock(
+    if ((globalSecondaryBuffer->Lock(
             byteToLock,
             bytesToWrite,
             &region1, &region1Size,
             &region2, &region2Size,
-            0))) {
+            0)) != DS_OK) {
         // NOTE: Locking buffer did not succeed.
         // TODO: Diagnostic
-        OutputDebugString(L"DEBUG: Locking buffer did not succeed. \n");
+        // OutputDebugString(L"DEBUG: Locking buffer did not succeed. \n");
     } 
     
     // TODO: assert that region sizes are valid.
@@ -538,9 +562,9 @@ static void RenderWeirdGradient(Win32BitmapBuffer* buffer, int xOffset, int yOff
 
 // NOTE: This is testing code.
 static void WriteSineWave(Win32SoundOutput* soundOutput) {
-   
+
     // NOTE: Direct Sound output tests.
-    
+
     int halfSquareWavePeriod = soundOutput->wavePeriod / 2;
 
     DWORD playCursor;
