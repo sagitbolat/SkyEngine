@@ -15,12 +15,12 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="SkyWin32.cpp">
+    <ClCompile Include="win32_sky.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="SkyWin32.h">
+    <ClInclude Include="win32_sky.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

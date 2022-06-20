@@ -1,7 +1,23 @@
+/* TODO: THIS IS NOT THE FINAL PLATFORM LAYER.
+   * > To-do list:
+     * >> Saved game locations
+     * >> Getting a handle to our own executable file
+     * >> Asset loading path
+     * >> Threading (launch a thread)
+     * >> Raw Input (support for multi-keyboard input)
+     * >> Sleep/timeBeginPeriod
+     * >> ClipCursor() (for multi-monitor support)
+     * >> Fullscreen support
+     * >> WM_SETCURSOR (control cursor visibility)
+     * >> QueryCancelAutoplay
+     * >> WM_ACTIVATEAPP (for when we are not the active app)
+     * >> Blit speed improvements (BitBlt)
+     * >> Hardware acceleration (OpenGL or Direct3D)
+     * >> GetKeyboardLayout (international keyboard like polish or french layout)
+     * >>>> OTHER
+ */
 
-
-
-#include "SkyWin32.h"
+#include "win32_sky.h"
 #include <stdint.h>
 
 #include <xinput.h>
@@ -37,6 +53,8 @@ struct Win32SoundOutput {
     int     wavePeriod;
     int     bytesPerSample;
     int     secondaryBufferSize;
+    float   t_sine;
+    int     latency_sample_count;
 };
 
 // SECTION: Constants
@@ -51,7 +69,7 @@ static  Win32BitmapBuffer   Win32ResizeDIBSection   (Win32BitmapBuffer buffer, i
 static  void                Win32CopyBufferToWindow (HDC DeviceContext, int windowWidth, int windowHeight, Win32BitmapBuffer buffer);
 static  void                RenderWeirdGradient     (Win32BitmapBuffer* buffer, int xOffset, int yOffset);
 static  void                Win32LoadXInput         ();
-static  void                Win32PollXInput         ();
+static  void                Win32PollXInput         (Win32SoundOutput*);
 static  void                Win32InitDirectSound    (HWND hwnd, int32_t samplesPerSecond, int32_t bufferSize);
 static  void                WriteSineWave           (Win32SoundOutput* soundOutput); 
 static  void                Win32FillSoundBuffer    (Win32SoundOutput* soundOutput, DWORD byteToLock, DWORD bytesToWrite);
@@ -92,15 +110,17 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, 
     Win32SoundOutput soundOutput = { };
     soundOutput.samplesPerSecond = 48000; 
     soundOutput.toneHz = 256;
-    soundOutput.toneVolume = 1000;
+    soundOutput.toneVolume = 500;
     soundOutput.runningSampleIndex = 0;
     soundOutput.wavePeriod = soundOutput.samplesPerSecond / soundOutput.toneHz;
     soundOutput.bytesPerSample = sizeof(int16_t) * 2;
     soundOutput.secondaryBufferSize = soundOutput.samplesPerSecond * soundOutput.bytesPerSample;
+    soundOutput.latency_sample_count = soundOutput.samplesPerSecond / 15; // NOTE: our latency is 1/15th of a second.
+
 
     // NOTE: Loads DirectSound
     Win32InitDirectSound(hwnd, soundOutput.samplesPerSecond, soundOutput.secondaryBufferSize);
-    Win32FillSoundBuffer(&soundOutput, 0, soundOutput.secondaryBufferSize);
+    Win32FillSoundBuffer(&soundOutput, 0, soundOutput.latency_sample_count * soundOutput.bytesPerSample);
     globalSecondaryBuffer->Play(0, 0, DSBPLAY_LOOPING);
 
 //    bool soundIsPlaying = false;
@@ -129,7 +149,7 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, 
         // NOTE: Poll Xinput events. Should this be done more frequently?
         // TODO: XInputGetState stalls if the controller is not plugged in so later on, 
         //       change it to only poll active controllers.
-        Win32PollXInput();
+        Win32PollXInput(&soundOutput);
 
         // TODO: This is for debugging purposes.
         // NOTE: Vibrates the first controller.
@@ -235,7 +255,7 @@ static void Win32LoadXInput() {
     } 
 }
 
-static void Win32PollXInput() {
+static void Win32PollXInput(Win32SoundOutput* soundOutput) {
     for (DWORD controllerIndex = 0; controllerIndex < XUSER_MAX_COUNT; ++controllerIndex) {
         XINPUT_STATE controller_state = { };
         if (XInputGetState(controllerIndex, &controller_state) == ERROR_SUCCESS) {
@@ -267,6 +287,38 @@ static void Win32PollXInput() {
             if (down || a_button) { --yOffset; }
             if (left || x_button) { ++xOffset; }
             if (right || b_button) { --xOffset; }*/
+            
+            // DEBUG: change sound pitch on button press
+            if (left_shoulder) {
+                // NOTE: D#
+                soundOutput->toneHz = 622;
+                soundOutput->wavePeriod = soundOutput->samplesPerSecond / soundOutput->toneHz;
+            }
+            if (right_shoulder) {
+                // NOTE: E
+                soundOutput->toneHz = 659;
+                soundOutput->wavePeriod = soundOutput->samplesPerSecond / soundOutput->toneHz;
+            }
+            if (x_button) {
+                // NOTE: B
+                soundOutput->toneHz = 494;
+                soundOutput->wavePeriod = soundOutput->samplesPerSecond / soundOutput->toneHz;
+            }
+            if (y_button) {
+                // NOTE: D
+                soundOutput->toneHz = 587;
+                soundOutput->wavePeriod = soundOutput->samplesPerSecond / soundOutput->toneHz;
+            }
+            if (b_button) {
+                // NOTE: C
+                soundOutput->toneHz = 523;
+                soundOutput->wavePeriod = soundOutput->samplesPerSecond / soundOutput->toneHz;
+            }
+            if (a_button) {
+                // NOTE: A
+                soundOutput->toneHz = 440;
+                soundOutput->wavePeriod = soundOutput->samplesPerSecond / soundOutput->toneHz;
+            }
         }
         else {
             // TODO: Handle unavailable controller if needed. Ex: tell user that controller is unplugged.
@@ -508,22 +560,24 @@ static void Win32FillSoundBuffer(Win32SoundOutput* soundOutput, DWORD byteToLock
     DWORD region1SampleCount = region1Size / soundOutput->bytesPerSample;
     int16_t* sampleOut = (int16_t*)region1;
     for(DWORD sampleIndex = 0; sampleIndex < region1SampleCount; ++sampleIndex) {
-        float t = 2.0f * PI32 * (float)soundOutput->runningSampleIndex / (float)soundOutput->wavePeriod;
-        float sineValue = sinf(t);
+        float sineValue = sinf(soundOutput->t_sine);
         int16_t sampleValue = (int16_t)(sineValue * soundOutput->toneVolume);
         *sampleOut++ = sampleValue;
         *sampleOut++ = sampleValue;
+        soundOutput->t_sine += 2.0f * PI32 * (float)1.0f / (float)soundOutput->wavePeriod;
+        
         ++(soundOutput->runningSampleIndex);
     }
 
     DWORD region2SampleCount = region2Size / soundOutput->bytesPerSample;
     sampleOut = (int16_t*)region2;
     for(DWORD sampleIndex = 0; sampleIndex < region2SampleCount; ++sampleIndex) {
-        float t = 2.0f * PI32 * (float)soundOutput->runningSampleIndex / (float)soundOutput->wavePeriod;
-        float sineValue = sinf(t);
+        float sineValue = sinf(soundOutput->t_sine);
         int16_t sampleValue = (int16_t)(sineValue * soundOutput->toneVolume);
         *sampleOut++ = sampleValue;
         *sampleOut++ = sampleValue;
+        soundOutput->t_sine += 2.0f * PI32 * (float)1.0f / (float)soundOutput->wavePeriod;
+        
         ++(soundOutput->runningSampleIndex);
     }
 
@@ -577,16 +631,16 @@ static void WriteSineWave(Win32SoundOutput* soundOutput) {
     }
     
     DWORD byteToLock = (soundOutput->runningSampleIndex * soundOutput->bytesPerSample) % soundOutput->secondaryBufferSize;
+    
+    DWORD targetCursor = (playCursor + (soundOutput->latency_sample_count * soundOutput->bytesPerSample)) % soundOutput->secondaryBufferSize;
     DWORD bytesToWrite;
 
     // TODO: We should probably not write the length of the whole buffer in order to lower the latency.
-    if (byteToLock == playCursor) {
-        bytesToWrite = 0;
-    } else if (byteToLock > playCursor) {
+    if (byteToLock > targetCursor) {
         bytesToWrite = (soundOutput->secondaryBufferSize - byteToLock);        
-        bytesToWrite += playCursor;
+        bytesToWrite += targetCursor;
     } else {
-        bytesToWrite = playCursor - byteToLock;
+        bytesToWrite = targetCursor - byteToLock;
     }
     Win32FillSoundBuffer(soundOutput, byteToLock, bytesToWrite);
 }

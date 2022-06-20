@@ -139,10 +139,10 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="SkyWin32.cpp" />
+    <ClCompile Include="win32_sky.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="SkyWin32.h" />
+    <ClInclude Include="win32_sky.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

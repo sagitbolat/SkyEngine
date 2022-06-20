@@ -1,5 +1,5 @@
 
-#include "SkyWin32.h"
+#include "SkyWin32.cpp"
 #include <stdint.h>
 
 
