@@ -18,9 +18,12 @@
     <ClCompile Include="win32_sky.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="skyengine.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="win32_sky.h">
+    <ClInclude Include="skyengine.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

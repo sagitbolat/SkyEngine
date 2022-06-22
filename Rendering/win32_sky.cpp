@@ -17,7 +17,8 @@
      * >>>> OTHER
  */
 
-#include "win32_sky.h"
+// SECTION: Includes and global defines.
+#include <windows.h>
 #include <stdint.h>
 
 #include <xinput.h>
@@ -27,6 +28,7 @@
 #include <math.h>
 
 #define PI32 3.14159265
+#include "skyengine.cpp"
 
 
 // SECTION: param structs.
@@ -37,17 +39,26 @@ struct Win32WindowDimensions {
     int Height;
 };
 static Win32WindowDimensions Win32GetWindowDimensions(HWND hwnd) {
-    RECT windowRect = { };
-    GetClientRect(hwnd, &windowRect);
-    int width = windowRect.right - windowRect.left;
-    int height = windowRect.bottom - windowRect.top;
+    RECT window_rect = { };
+    GetClientRect(hwnd, &window_rect);
+    int width = window_rect.right - window_rect.left;
+    int height = window_rect.bottom - window_rect.top;
     return(Win32WindowDimensions{ width, height });
 }
 
+// NOTE: Windows bitmap buffer.
+struct Win32BitmapBuffer {
+    BITMAPINFO  Info;
+    void*       Memory;
+    int         Width;
+    int         Height;
+    int         Pitch;
+};
+
 // NOTE: SoundParamStruct
 struct Win32SoundOutput {
-    int     samplesPerSecond;
-    int     toneHz;
+    int     samples_per_second;
+    int     tone_hz;
     int16_t toneVolume;
     uint32_t runningSampleIndex;
     int     wavePeriod;
@@ -57,22 +68,38 @@ struct Win32SoundOutput {
     int     latency_sample_count;
 };
 
+
+
 // SECTION: Constants
 const wchar_t CLASS_NAME[] = L"SkyEngineWindowClass";
+const int BUFFER_WIDTH = 1280;
+const int BUFFER_HEIGHT = 720;
+
+
 
 // SECTION: Globals
+// TODO: Remove later.
 LPDIRECTSOUNDBUFFER globalSecondaryBuffer;
+static bool Running;
+static Win32BitmapBuffer globalBackbuffer = { };
+
+
 
 // SECTION: Forward function declarations
 LRESULT CALLBACK            Win32WindowProc         (HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 static  Win32BitmapBuffer   Win32ResizeDIBSection   (Win32BitmapBuffer buffer, int width, int height);
 static  void                Win32CopyBufferToWindow (HDC DeviceContext, int windowWidth, int windowHeight, Win32BitmapBuffer buffer);
-static  void                RenderWeirdGradient     (Win32BitmapBuffer* buffer, int xOffset, int yOffset);
 static  void                Win32LoadXInput         ();
 static  void                Win32PollXInput         (Win32SoundOutput*);
-static  void                Win32InitDirectSound    (HWND hwnd, int32_t samplesPerSecond, int32_t bufferSize);
+static  void                Win32InitDirectSound    (HWND hwnd, int32_t samples_per_second, int32_t bufferSize);
 static  void                WriteSineWave           (Win32SoundOutput* soundOutput); 
 static  void                Win32FillSoundBuffer    (Win32SoundOutput* soundOutput, DWORD byteToLock, DWORD bytesToWrite);
+static  bool                Win32InitWindow         (HINSTANCE hInstance, int nCmdShow, HWND* hwnd);
+static  void                Win32ProcessMessageQueue();
+static  void                Win32UpdateWindow       (HWND* hwnd);
+
+
+
 // SECTION: XInput library function declaration macros
 // NOTE: XInputGetState 
 #define X_INPUT_GET_STATE(name) DWORD WINAPI name(DWORD dwUserIndex, XINPUT_STATE* pState)
@@ -91,12 +118,14 @@ X_INPUT_SET_STATE(XInputSetStateStub) {
 static x_input_set_state* XInputSetState_ = XInputSetStateStub;
 #define XInputSetState XInputSetState_
 
+
+
 // SECTION: DirectSound library function declration macros
 #define DIRECT_SOUND_CREATE(name) HRESULT WINAPI name(LPCGUID pcGuidDevice, LPDIRECTSOUND* ppDS, LPUNKNOWN pUnkOuter)
 typedef DIRECT_SOUND_CREATE(direct_sound_create);
 
 
-// TODO: the wWinMain is temporary. Move to different file
+
 int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _In_ LPWSTR lpCmdLine, _In_ int nCmdShow) {
     HWND hwnd = { };
 
@@ -108,18 +137,18 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, 
     
     // NOTE: Loads sound buffer output defaults
     Win32SoundOutput soundOutput = { };
-    soundOutput.samplesPerSecond = 48000; 
-    soundOutput.toneHz = 256;
+    soundOutput.samples_per_second = 48000; 
+    soundOutput.tone_hz = 256;
     soundOutput.toneVolume = 500;
     soundOutput.runningSampleIndex = 0;
-    soundOutput.wavePeriod = soundOutput.samplesPerSecond / soundOutput.toneHz;
+    soundOutput.wavePeriod = soundOutput.samples_per_second / soundOutput.tone_hz;
     soundOutput.bytesPerSample = sizeof(int16_t) * 2;
-    soundOutput.secondaryBufferSize = soundOutput.samplesPerSecond * soundOutput.bytesPerSample;
-    soundOutput.latency_sample_count = soundOutput.samplesPerSecond / 15; // NOTE: our latency is 1/15th of a second.
+    soundOutput.secondaryBufferSize = soundOutput.samples_per_second * soundOutput.bytesPerSample;
+    soundOutput.latency_sample_count = soundOutput.samples_per_second / 15; // NOTE: our latency is 1/15th of a second.
 
 
     // NOTE: Loads DirectSound
-    Win32InitDirectSound(hwnd, soundOutput.samplesPerSecond, soundOutput.secondaryBufferSize);
+    Win32InitDirectSound(hwnd, soundOutput.samples_per_second, soundOutput.secondaryBufferSize);
     Win32FillSoundBuffer(&soundOutput, 0, soundOutput.latency_sample_count * soundOutput.bytesPerSample);
     globalSecondaryBuffer->Play(0, 0, DSBPLAY_LOOPING);
 
@@ -134,12 +163,6 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, 
     // NOTE: This is for the Square wave sound.
     // TODO: Remove later
     uint32_t runningSampleIndex = 0;
-
-    // TIMER: Keep track of full frame wall-clock timer.
-    LARGE_INTEGER timer_frequency;
-    QueryPerformanceFrequency(&timer_frequency);
-    LARGE_INTEGER previous_timer;
-    QueryPerformanceCounter(&previous_timer);
 
     while (Running) {
         
@@ -158,26 +181,20 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, 
         vibration.wRightMotorSpeed = 3000;
         XInputSetState(0, &vibration);
 
-        // NOTE: Draw gradient
-        // TODO: Delete this when rendering an actual game.
-        RenderWeirdGradient(&globalBackbuffer, xOffset, yOffset);
+        // NOTE: Gamespecific
+        GameBitmapBuffer buffer  = { };
+        buffer.Memory = globalBackbuffer.Memory;
+        buffer.Width = globalBackbuffer.Width;
+        buffer.Height = globalBackbuffer.Height;
+        buffer.Pitch = globalBackbuffer.Pitch;
+        GameUpdateAndRender(&buffer);
         
-        // NOTE: Directsound output square wave
+        // NOTE: Directsound output sine wave
         // TODO: Delete this when playing actual game sound.
         WriteSineWave(&soundOutput);
 
         // NOTE: Update window graphics. 
         Win32UpdateWindow(&hwnd);
-        
-        // TIMER: End the full frame wall-clock timer.
-        LARGE_INTEGER end_timer;
-        QueryPerformanceCounter(&end_timer);
-        // NOTE: Print timer elapsed.
-        int32_t elapsed_milliseconds = (1000) * (end_timer.QuadPart - previous_timer.QuadPart) / timer_frequency.QuadPart;
-        previous_timer = end_timer;
-        char buffer[256];
-        wsprintfA(buffer, "Milliseconds/frame: %dms \n", elapsed_milliseconds);
-        OutputDebugStringA(buffer); 
     }
     return 0;
 }
@@ -291,33 +308,33 @@ static void Win32PollXInput(Win32SoundOutput* soundOutput) {
             // DEBUG: change sound pitch on button press
             if (left_shoulder) {
                 // NOTE: D#
-                soundOutput->toneHz = 622;
-                soundOutput->wavePeriod = soundOutput->samplesPerSecond / soundOutput->toneHz;
+                soundOutput->tone_hz = 622;
+                soundOutput->wavePeriod = soundOutput->samples_per_second / soundOutput->tone_hz;
             }
             if (right_shoulder) {
                 // NOTE: E
-                soundOutput->toneHz = 659;
-                soundOutput->wavePeriod = soundOutput->samplesPerSecond / soundOutput->toneHz;
+                soundOutput->tone_hz = 659;
+                soundOutput->wavePeriod = soundOutput->samples_per_second / soundOutput->tone_hz;
             }
             if (x_button) {
                 // NOTE: B
-                soundOutput->toneHz = 494;
-                soundOutput->wavePeriod = soundOutput->samplesPerSecond / soundOutput->toneHz;
+                soundOutput->tone_hz = 494;
+                soundOutput->wavePeriod = soundOutput->samples_per_second / soundOutput->tone_hz;
             }
             if (y_button) {
                 // NOTE: D
-                soundOutput->toneHz = 587;
-                soundOutput->wavePeriod = soundOutput->samplesPerSecond / soundOutput->toneHz;
+                soundOutput->tone_hz = 587;
+                soundOutput->wavePeriod = soundOutput->samples_per_second / soundOutput->tone_hz;
             }
             if (b_button) {
                 // NOTE: C
-                soundOutput->toneHz = 523;
-                soundOutput->wavePeriod = soundOutput->samplesPerSecond / soundOutput->toneHz;
+                soundOutput->tone_hz = 523;
+                soundOutput->wavePeriod = soundOutput->samples_per_second / soundOutput->tone_hz;
             }
             if (a_button) {
                 // NOTE: A
-                soundOutput->toneHz = 440;
-                soundOutput->wavePeriod = soundOutput->samplesPerSecond / soundOutput->toneHz;
+                soundOutput->tone_hz = 440;
+                soundOutput->wavePeriod = soundOutput->samples_per_second / soundOutput->tone_hz;
             }
         }
         else {
@@ -329,7 +346,7 @@ static void Win32PollXInput(Win32SoundOutput* soundOutput) {
 
 
 // TODO: change return type to bool to check for failures.
-static void Win32InitDirectSound(HWND hwnd, int32_t samplesPerSecond, int32_t bufferSize) {
+static void Win32InitDirectSound(HWND hwnd, int32_t samples_per_second, int32_t bufferSize) {
     // SECTION: Load the library
     
     HMODULE directSoundLibrary = LoadLibrary(L"dsound.dll");
@@ -369,7 +386,7 @@ static void Win32InitDirectSound(HWND hwnd, int32_t samplesPerSecond, int32_t bu
     WAVEFORMATEX waveFormat = { };
     waveFormat.wFormatTag = WAVE_FORMAT_PCM;
     waveFormat.nChannels = 2;
-    waveFormat.nSamplesPerSec = samplesPerSecond;
+    waveFormat.nSamplesPerSec = samples_per_second;
     waveFormat.wBitsPerSample = 16;
     waveFormat.nBlockAlign = (waveFormat.nChannels * waveFormat.wBitsPerSample) / 8;
     waveFormat.nAvgBytesPerSec = waveFormat.nSamplesPerSec * waveFormat.nBlockAlign;
@@ -511,13 +528,13 @@ static Win32BitmapBuffer Win32ResizeDIBSection(Win32BitmapBuffer buffer, int wid
     buffer.Info.bmiHeader.biBitCount         = 32;
     buffer.Info.bmiHeader.biCompression      = BI_RGB;
     
-    buffer.BytesPerPixel = 4;
-    int bitmapMemorySize = (width * height) * buffer.BytesPerPixel;
+    const int bytes_per_pixel = 4;
+    int bitmapMemorySize = (width * height) * bytes_per_pixel;
     buffer.Memory = VirtualAlloc(0, bitmapMemorySize, MEM_COMMIT, PAGE_READWRITE);
 
     // TODO: Clear screen to black?
     
-    buffer.Pitch  = buffer.Width * buffer.BytesPerPixel;
+    buffer.Pitch  = buffer.Width * bytes_per_pixel;
     return (buffer);
 }
 
@@ -588,30 +605,6 @@ static void Win32FillSoundBuffer(Win32SoundOutput* soundOutput, DWORD byteToLock
     }
 }
 
-
-
-// NOTE: This is testing code.
-static void RenderWeirdGradient(Win32BitmapBuffer* buffer, int xOffset, int yOffset) {
-    // NOTE: Drawing Logic.
-
-    uint8_t* row = (uint8_t*)buffer->Memory;
-
-    for (int y = 0; y < buffer->Height; ++y) {
-
-        uint32_t* pixel = (uint32_t*)row;
-
-        for (int x = 0; x < buffer->Width; ++x) {
-
-            uint8_t blue = (uint8_t)(x + xOffset);       // NOTE: Blue channel
-            uint8_t green = (uint8_t)(0);                 // NOTE: Green channel
-            uint8_t red = (uint8_t)(y + yOffset);       // NOTE: Red channel
-
-
-            *pixel++ = ((red << 16) | (green << 8) | blue);
-        }
-        row += buffer->Pitch;
-    }
-}
 
 
 // NOTE: This is testing code.
