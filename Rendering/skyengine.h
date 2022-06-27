@@ -20,7 +20,15 @@ struct GameBitmapBuffer {
     int         Pitch;
 };
 
-static void GameUpdateAndRender(GameBitmapBuffer* buffer);
+// NOTE: Platform independant sound buffer.
+struct GameSoundBuffer {
+    int samples_per_second;
+    int sample_count;
+    int16_t* samples;
+
+};
+
+static void GameUpdateAndRender(GameBitmapBuffer* graphics_buffer, GameSoundBuffer* sound_buffer);
 
 
 #define SKYENGINE_H

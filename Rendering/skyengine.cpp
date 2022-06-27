@@ -1,5 +1,8 @@
 #include "skyengine.h"
+// TODO: Remove this at some point and implement trig functions myself.
+#include <math.h>
 
+#define PI32 3.14159265f
 // NOTE: DEBUG: this is testing code.
 static void RenderWeirdGradient(GameBitmapBuffer* buffer, int x_offset, int y_offset) {
     // NOTE: Drawing Logic.
@@ -24,8 +27,31 @@ static void RenderWeirdGradient(GameBitmapBuffer* buffer, int x_offset, int y_of
 }
 
 
-static void GameUpdateAndRender(GameBitmapBuffer* buffer) {
+
+// NOTE: DEBUG: this is testing code
+static void GameOutputSound(GameSoundBuffer* sound_buffer) {
+    static float t_sine;
+    int16_t tone_volume = 1000;
+    int tone_hz = 256;
+
+    int wave_period = sound_buffer->samples_per_second/tone_hz;
+
+    int16_t* sample_out = sound_buffer->samples;
+    for(int sample_index = 0; sample_index < sound_buffer->sample_count; ++sample_index) {
+        float sine_value = sinf(t_sine);
+        int16_t sample_value = (int16_t)(sine_value * tone_volume);
+        *sample_out++ = sample_value;
+        *sample_out++ = sample_value;
+        t_sine += 2.0f * PI32 * 1.0f / (float)wave_period;
+    }
+
+}
+
+
+static void GameUpdateAndRender(GameBitmapBuffer* graphics_buffer, GameSoundBuffer* sound_buffer) {
     int x_offset = 0;
     int y_offset = 0;
-    RenderWeirdGradient(buffer, x_offset, y_offset);
+    // TODO: Allow sample offsets here for more robust platform options.
+    GameOutputSound(sound_buffer);
+    RenderWeirdGradient(graphics_buffer, x_offset, y_offset);
 }

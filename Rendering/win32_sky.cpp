@@ -25,9 +25,9 @@
 #include <dsound.h>
 
 // TODO: Remove this at some point and implement trig functions myself.
-#include <math.h>
+//#include <math.h>
 
-#define PI32 3.14159265
+//#define PI32 3.14159265
 #include "skyengine.cpp"
 
 
@@ -90,10 +90,11 @@ LRESULT CALLBACK            Win32WindowProc         (HWND hwnd, UINT windows_mes
 static  Win32BitmapBuffer   Win32ResizeDIBSection   (Win32BitmapBuffer buffer, int width, int height);
 static  void                Win32CopyBufferToWindow (HDC device_context, int window_width, int window_height, Win32BitmapBuffer buffer);
 static  void                Win32LoadXInput         ();
-static  void                Win32PollXInput         (Win32SoundOutput*);
+static  void                Win32PollXInput         (Win32SoundOutput* sound_output);
 static  void                Win32InitDirectSound    (HWND hwnd, int32_t samples_per_second, int32_t buffer_size);
-static  void                WriteSineWave           (Win32SoundOutput* sound_output); 
-static  void                Win32FillSoundBuffer    (Win32SoundOutput* sound_output, DWORD byte_to_lock, DWORD bytes_to_write);
+static  void                WriteSineWave           (Win32SoundOutput* sound_output, GameSoundBuffer* sound_buffer);
+static  void                Win32ClearSoundBuffer   (Win32SoundOutput* sound_output);
+static  void                Win32FillSoundBuffer    (Win32SoundOutput* sound_output, DWORD byte_to_lock, DWORD bytes_to_write, GameSoundBuffer* sound_buffer);
 static  bool                Win32InitWindow         (HINSTANCE hInstance, int nCmdShow, HWND* hwnd);
 static  void                Win32ProcessMessageQueue();
 static  void                Win32UpdateWindow       (HWND* hwnd);
@@ -149,10 +150,10 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, 
 
     // NOTE: Loads DirectSound
     Win32InitDirectSound(hwnd, sound_output.samples_per_second, sound_output.secondary_buffer_size);
-    Win32FillSoundBuffer(&sound_output, 0, sound_output.latency_sample_count * sound_output.bytes_per_sample);
+    Win32ClearSoundBuffer(&sound_output);
     global_secondary_buffer->Play(0, 0, DSBPLAY_LOOPING);
 
-//    bool soundIsPlaying = false;
+    int16_t* samples = (int16_t*)VirtualAlloc(0, sound_output.secondary_buffer_size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
     
     // NOTE: Run the game loop.
     // TODO: Replace later with a better loop.
@@ -181,17 +182,57 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, 
         vibration.wRightMotorSpeed = 3000;
         XInputSetState(0, &vibration);
 
-        // NOTE: Gamespecific
-        GameBitmapBuffer buffer  = { };
-        buffer.Memory = global_back_buffer.Memory;
-        buffer.Width = global_back_buffer.Width;
-        buffer.Height = global_back_buffer.Height;
-        buffer.Pitch = global_back_buffer.Pitch;
-        GameUpdateAndRender(&buffer);
+
+
+        DWORD byte_to_lock = 0;
+        DWORD bytes_to_write = 0;
+        DWORD target_cursor = 0;
+        DWORD play_cursor = 0;
+        DWORD write_cursor = 0;
+        bool sound_is_valid = true;
+
+        if (!SUCCEEDED(global_secondary_buffer->GetCurrentPosition(&play_cursor, &write_cursor))) {
+            // NOTE: Current buffer did not exist.
+            // TODO: Diagnostic
+            sound_is_valid = false;
+            OutputDebugString(L"DEBUG: Current buffer did not exist \n");
+        } else {
+            byte_to_lock = (sound_output.running_sample_index * sound_output.bytes_per_sample) % sound_output.secondary_buffer_size;
+
+            target_cursor = (play_cursor + (sound_output.latency_sample_count * sound_output.bytes_per_sample)) % sound_output.secondary_buffer_size;
+
+            // TODO: We should probably not write the length of the whole buffer in order to lower the latency.
+            if (byte_to_lock > target_cursor) {
+                bytes_to_write = (sound_output.secondary_buffer_size - byte_to_lock);
+                bytes_to_write += target_cursor;
+            }
+            else {
+                bytes_to_write = target_cursor - byte_to_lock;
+            }
+            sound_is_valid = true;
+        }
+
+        // NOTE: Game specific graphics and sound
+        GameSoundBuffer sound_buffer = { };
+        sound_buffer.samples_per_second = sound_output.samples_per_second;
+        sound_buffer.sample_count = bytes_to_write / sound_output.bytes_per_sample;
+        sound_buffer.samples = samples;
+
+        GameBitmapBuffer graphics_buffer  = { };
+        graphics_buffer.Memory = global_back_buffer.Memory;
+        graphics_buffer.Width = global_back_buffer.Width;
+        graphics_buffer.Height = global_back_buffer.Height;
+        graphics_buffer.Pitch = global_back_buffer.Pitch;
+
+        // Run game update buffers.
+        GameUpdateAndRender(&graphics_buffer, &sound_buffer);
+
+        // NOTE: Directsound output
+        if (sound_is_valid) {
+            Win32FillSoundBuffer(&sound_output, byte_to_lock, bytes_to_write, &sound_buffer);
+        }
+
         
-        // NOTE: Directsound output sine wave
-        // TODO: Delete this when playing actual game sound.
-        WriteSineWave(&sound_output);
 
         // NOTE: Update window graphics. 
         Win32UpdateWindow(&hwnd);
@@ -555,7 +596,37 @@ static void Win32CopyBufferToWindow(HDC device_context, int window_width, int wi
 
 
 
-static void Win32FillSoundBuffer(Win32SoundOutput* sound_output, DWORD byte_to_lock, DWORD bytes_to_write) {
+static void Win32ClearSoundBuffer(Win32SoundOutput* sound_output) {
+    VOID* region1;
+    DWORD region1_size;
+    VOID* region2;
+    DWORD region2_size;
+
+    if ((global_secondary_buffer->Lock(
+        0,
+        sound_output->secondary_buffer_size,
+        &region1, &region1_size,
+        &region2, &region2_size,
+        0)) != DS_OK) {
+        // NOTE: Locking buffer did not succeed.
+        // TODO: Diagnostic
+        // OutputDebugString(L"DEBUG: Locking buffer did not succeed. \n");
+    }
+
+    uint8_t* destination_sample = (uint8_t*)region1;
+    for (DWORD byte_index = 0; byte_index < region1_size; ++byte_index) {
+        *destination_sample++ = 0;
+    }
+    destination_sample = (uint8_t*)region2;
+    for (DWORD byte_index = 0; byte_index < region2_size; ++byte_index) {
+        *destination_sample++ = 0;
+    }
+
+    global_secondary_buffer->Unlock(region1, region1_size, region2, region2_size);
+}
+
+static void Win32FillSoundBuffer(Win32SoundOutput* sound_output, DWORD byte_to_lock, DWORD bytes_to_write, 
+                                 GameSoundBuffer* sound_buffer) {
     // NOTE: The two buffer regions.
     VOID* region1;
     DWORD region1_size;
@@ -570,32 +641,25 @@ static void Win32FillSoundBuffer(Win32SoundOutput* sound_output, DWORD byte_to_l
             0)) != DS_OK) {
         // NOTE: Locking buffer did not succeed.
         // TODO: Diagnostic
-        // OutputDebugString(L"DEBUG: Locking buffer did not succeed. \n");
+        OutputDebugString(L"DEBUG: Locking buffer did not succeed. \n");
     } 
     
     // TODO: assert that region sizes are valid.
     
     DWORD region1_sample_count = region1_size / sound_output->bytes_per_sample;
-    int16_t* sample_out = (int16_t*)region1;
+    int16_t* destination_sample = (int16_t*)region1;
+    int16_t* source_sample = sound_buffer->samples;
     for(DWORD sample_index = 0; sample_index < region1_sample_count; ++sample_index) {
-        float sine_value = sinf(sound_output->t_sine);
-        int16_t sample_value = (int16_t)(sine_value * sound_output->tone_volume);
-        *sample_out++ = sample_value;
-        *sample_out++ = sample_value;
-        sound_output->t_sine += 2.0f * PI32 * (float)1.0f / (float)sound_output->wave_period;
-        
+        *destination_sample++ = *source_sample++;
+        *destination_sample++ = *source_sample++;
         ++(sound_output->running_sample_index);
     }
 
     DWORD region2_sample_count = region2_size / sound_output->bytes_per_sample;
-    sample_out = (int16_t*)region2;
+    destination_sample = (int16_t*)region2;
     for(DWORD sample_index = 0; sample_index < region2_sample_count; ++sample_index) {
-        float sine_value = sinf(sound_output->t_sine);
-        int16_t sample_value = (int16_t)(sine_value * sound_output->tone_volume);
-        *sample_out++ = sample_value;
-        *sample_out++ = sample_value;
-        sound_output->t_sine += 2.0f * PI32 * (float)1.0f / (float)sound_output->wave_period;
-        
+        *destination_sample++ = *source_sample++;
+        *destination_sample++ = *source_sample++;
         ++(sound_output->running_sample_index);
     }
 
@@ -606,33 +670,3 @@ static void Win32FillSoundBuffer(Win32SoundOutput* sound_output, DWORD byte_to_l
     }
 }
 
-
-
-// NOTE: This is testing code.
-static void WriteSineWave(Win32SoundOutput* sound_output) {
-
-    // NOTE: Direct Sound output tests.
-
-    DWORD play_cursor;
-    DWORD write_cursor;
-
-    if (!SUCCEEDED(global_secondary_buffer->GetCurrentPosition(&play_cursor, &write_cursor))) {
-        // NOTE: Current buffer did not exist.
-        // TODO: Diagnostic
-        OutputDebugString(L"DEBUG: Current buffer did not exist \n");
-    }
-    
-    DWORD byte_to_lock = (sound_output->running_sample_index * sound_output->bytes_per_sample) % sound_output->secondary_buffer_size;
-    
-    DWORD target_cursor = (play_cursor + (sound_output->latency_sample_count * sound_output->bytes_per_sample)) % sound_output->secondary_buffer_size;
-    DWORD bytes_to_write;
-
-    // TODO: We should probably not write the length of the whole buffer in order to lower the latency.
-    if (byte_to_lock > target_cursor) {
-        bytes_to_write = (sound_output->secondary_buffer_size - byte_to_lock);        
-        bytes_to_write += target_cursor;
-    } else {
-        bytes_to_write = target_cursor - byte_to_lock;
-    }
-    Win32FillSoundBuffer(sound_output, byte_to_lock, bytes_to_write);
-}
