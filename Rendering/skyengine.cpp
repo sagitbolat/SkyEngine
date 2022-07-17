@@ -56,6 +56,14 @@ static void GameUpdateAndRender(GameMemory* memory, GameBitmapBuffer* graphics_b
     GameState* game_state = (GameState*)memory->permanent_storage;
     
     if (!memory->is_initialized) {
+        const char* file_name = __FILE__;
+        
+        DEBUGReadFileResult file = DEBUGPlatformReadEntireFile(file_name);
+        if (!file.contents) {
+            // TODO: Debug file read failure.
+        }
+        DEBUGPlatformWriteEntireFile("test.out", file.contents_size, file.contents);
+        DEBUGPlatformFreeFileMemory(file.contents);
         game_state->tone_hz = 256;
         memory->is_initialized = true;
     }

@@ -673,7 +673,7 @@ static void Win32FillSoundBuffer(Win32SoundOutput* sound_output, DWORD byte_to_l
             0)) != DS_OK) {
         // NOTE: Locking buffer did not succeed.
         // TODO: Diagnostic
-        OutputDebugString(L"DEBUG: Locking buffer did not succeed. \n");
+        //OutputDebugString(L"DEBUG: Locking buffer did not succeed. \n");
     } 
     
     // TODO: assert that region sizes are valid.
@@ -701,4 +701,74 @@ static void Win32FillSoundBuffer(Win32SoundOutput* sound_output, DWORD byte_to_l
         OutputDebugString(L"DEBUG: Unlocking buffer did not succeed \n");
     }
 }
+
+
+
+// SECTION: File I/O
+DEBUGReadFileResult DEBUGPlatformReadEntireFile(const char* file_name) {
+    DEBUGReadFileResult result = { };
+    HANDLE file_handle = CreateFileA(file_name, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, NULL, NULL);
+    if (file_handle == INVALID_HANDLE_VALUE) {
+        // TODO: Error
+        return result;
+    }
+    LARGE_INTEGER file_size;
+    if (!GetFileSizeEx(file_handle, &file_size)) {
+        // TODO: Error
+        return result;
+    }
+
+    Assert(file_size.QuadPart <= 0xFFFFFFFF);
+    result.contents = VirtualAlloc(0, file_size.QuadPart, MEM_RESERVE|MEM_COMMIT, PAGE_READWRITE);
+    if (!result.contents) {
+        // TODO: Error
+        return result;
+    }
+    
+    DWORD bytes_read;
+    if (!ReadFile(file_handle, result.contents, file_size.QuadPart, &bytes_read, NULL) || file_size.QuadPart != bytes_read) {
+        DEBUGPlatformFreeFileMemory(result.contents);
+        result.contents = 0;
+    }
+    
+    result.contents_size = file_size.QuadPart;
+
+    CloseHandle(file_handle);
+    OutputDebugStringA("Read File \n");
+    return result;
+}
+
+
+void DEBUGPlatformFreeFileMemory(void* memory) {
+    if (memory) {
+        VirtualFree(memory, 0, MEM_RELEASE);
+    }
+}
+
+
+bool DEBUGPlatformWriteEntireFile(const char* file_name, uint32_t memory_size, void* memory) {
+    bool result = false;
+
+    HANDLE file_handle = CreateFileA(file_name, GENERIC_WRITE, 0, 0, CREATE_ALWAYS, 0, 0);
+    if (file_handle == INVALID_HANDLE_VALUE) {
+        // TODO: Error
+        OutputDebugStringA("DEBUG: Write file handle invalid \n");
+        //return result;
+    }
+    DWORD bytes_written;
+    if (!WriteFile(file_handle, memory, memory_size, &bytes_written, 0)) {
+        // TODO: Error
+        OutputDebugStringA("DEBUG: Write file failed \n");
+        //return result;
+    }
+
+    result = (bytes_written == memory_size);
+    
+    CloseHandle(file_handle);
+    
+    OutputDebugStringA("Write File \n");
+    return result;
+}
+
+
 

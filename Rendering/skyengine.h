@@ -17,7 +17,13 @@
 
 
 // TODO: Services that the platform layer provides to the game:
-
+struct DEBUGReadFileResult {
+    uint32_t contents_size;
+    void* contents;
+};
+DEBUGReadFileResult DEBUGPlatformReadEntireFile (const char* file_name);
+void DEBUGPlatformFreeFileMemory                (void* memory);
+bool DEBUGPlatformWriteEntireFile               (const char* file_name, uint32_t memory_size, void* memory);
 
 // NOTE: Services that the game provides to the platform layer:
     // TODO: Maybe seperate sound on another thread and update async.
