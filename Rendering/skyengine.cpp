@@ -3,6 +3,8 @@
 #include <math.h>
 
 #define PI32 3.14159265f
+
+
 // NOTE: DEBUG: this is testing code.
 static void RenderWeirdGradient(GameBitmapBuffer* buffer, int x_offset, int y_offset) {
     // NOTE: Drawing Logic.
@@ -29,11 +31,10 @@ static void RenderWeirdGradient(GameBitmapBuffer* buffer, int x_offset, int y_of
 
 
 // NOTE: DEBUG: this is testing code
-static void GameOutputSound(GameSoundBuffer* sound_buffer) {
+static void GameOutputSound(GameSoundBuffer* sound_buffer, int tone_hz) {
     static float t_sine;
     int16_t tone_volume = 1000;
-    int tone_hz = 256;
-
+    
     int wave_period = sound_buffer->samples_per_second/tone_hz;
 
     int16_t* sample_out = sound_buffer->samples;
@@ -48,10 +49,37 @@ static void GameOutputSound(GameSoundBuffer* sound_buffer) {
 }
 
 
-static void GameUpdateAndRender(GameBitmapBuffer* graphics_buffer, GameSoundBuffer* sound_buffer) {
-    int x_offset = 0;
-    int y_offset = 0;
+static void GameUpdateAndRender(GameMemory* memory, GameBitmapBuffer* graphics_buffer, GameSoundBuffer* sound_buffer, GameInput* input) {
+    
+    Assert(sizeof(GameState) <= memory->permanent_storage_size);
+
+    GameState* game_state = (GameState*)memory->permanent_storage;
+    
+    if (!memory->is_initialized) {
+        game_state->tone_hz = 256;
+        memory->is_initialized = true;
+    }
+
+
+    GameControllerInput* input0 = &input->controllers[0];
+    
+    if (input0->is_analog) {
+        // NOTE: use analog movement tuning.
+        game_state->x_offset -= (int)4.0f * (input0->end_x);
+        game_state->y_offset += (int)4.0f * (input0->end_y);
+        game_state->tone_hz = 256 + (int)(128.0f * (input0->end_y));
+    } else {
+        // NOTE: use digital movement tuning.
+    }
+    
+
+    
+    if (input0->a_button.ended_down) {
+        game_state->y_offset += 1;
+        game_state->x_offset += 1;
+    }
+
     // TODO: Allow sample offsets here for more robust platform options.
-    GameOutputSound(sound_buffer);
-    RenderWeirdGradient(graphics_buffer, x_offset, y_offset);
+    GameOutputSound(sound_buffer, game_state->tone_hz);
+    RenderWeirdGradient(graphics_buffer, game_state->x_offset, game_state->y_offset);
 }

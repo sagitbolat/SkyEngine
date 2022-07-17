@@ -17,6 +17,9 @@
      * >>>> OTHER
  */
 
+#include "skyengine.h"
+#include "skyengine.cpp"
+
 // SECTION: Includes and global defines.
 #include <windows.h>
 #include <stdint.h>
@@ -28,7 +31,6 @@
 //#include <math.h>
 
 //#define PI32 3.14159265
-#include "skyengine.cpp"
 
 
 // SECTION: param structs.
@@ -58,10 +60,7 @@ struct Win32BitmapBuffer {
 // NOTE: SoundParamStruct
 struct Win32SoundOutput {
     int     samples_per_second;
-    int     tone_hz;
-    int16_t tone_volume;
     uint32_t running_sample_index;
-    int     wave_period;
     int     bytes_per_sample;
     int     secondary_buffer_size;
     float   t_sine;
@@ -78,7 +77,7 @@ const int BUFFER_HEIGHT = 720;
 
 
 // SECTION: Globals
-// TODO: Remove later.
+// TODO: Remove later?
 LPDIRECTSOUNDBUFFER global_secondary_buffer;
 static bool running;
 static Win32BitmapBuffer global_back_buffer = { };
@@ -90,9 +89,10 @@ LRESULT CALLBACK            Win32WindowProc         (HWND hwnd, UINT windows_mes
 static  Win32BitmapBuffer   Win32ResizeDIBSection   (Win32BitmapBuffer buffer, int width, int height);
 static  void                Win32CopyBufferToWindow (HDC device_context, int window_width, int window_height, Win32BitmapBuffer buffer);
 static  void                Win32LoadXInput         ();
-static  void                Win32PollXInput         (Win32SoundOutput* sound_output);
+static  void                Win32WriteButtonToInput (DWORD x_input_button_state, GameButtonState* new_button_state, GameButtonState* old_button_state, DWORD button_bit);
+static  void                Win32PollXInput         (GameInput* new_input, GameInput* old_input);
 static  void                Win32InitDirectSound    (HWND hwnd, int32_t samples_per_second, int32_t buffer_size);
-static  void                WriteSineWave           (Win32SoundOutput* sound_output, GameSoundBuffer* sound_buffer);
+//static  void                WriteSineWave           (Win32SoundOutput* sound_output, GameSoundBuffer* sound_buffer);
 static  void                Win32ClearSoundBuffer   (Win32SoundOutput* sound_output);
 static  void                Win32FillSoundBuffer    (Win32SoundOutput* sound_output, DWORD byte_to_lock, DWORD bytes_to_write, GameSoundBuffer* sound_buffer);
 static  bool                Win32InitWindow         (HINSTANCE hInstance, int nCmdShow, HWND* hwnd);
@@ -139,10 +139,7 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, 
     // NOTE: Loads sound buffer output defaults
     Win32SoundOutput sound_output = { };
     sound_output.samples_per_second = 48000; 
-    sound_output.tone_hz = 256;
-    sound_output.tone_volume = 500;
     sound_output.running_sample_index = 0;
-    sound_output.wave_period = sound_output.samples_per_second / sound_output.tone_hz;
     sound_output.bytes_per_sample = sizeof(int16_t) * 2;
     sound_output.secondary_buffer_size = sound_output.samples_per_second * sound_output.bytes_per_sample;
     sound_output.latency_sample_count = sound_output.samples_per_second / 15; // NOTE: our latency is 1/15th of a second.
@@ -155,32 +152,51 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, 
 
     int16_t* samples = (int16_t*)VirtualAlloc(0, sound_output.secondary_buffer_size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
     
+    
+    // NOTE: Loads game memory buffer
+    GameMemory game_memory = { };
+    game_memory.permanent_storage_size = Megabytes(64);
+    game_memory.permanent_storage = VirtualAlloc(0, game_memory.permanent_storage_size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+    game_memory.transient_storage_size = Gigabytes((uint64_t)1);
+    game_memory.transient_storage = VirtualAlloc(0, game_memory.transient_storage_size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+
+
+    // NOTE: make sure the game memory buffer and the sound buffer is allocated:
+    if (!samples || !game_memory.permanent_storage || !game_memory.transient_storage) {
+        OutputDebugString(L"Buffer allocations failed");
+        return 1;
+    }
+
+
+    // NOTE: Input buffers
+    GameInput input[2] = { };
+    GameInput* new_input = &input[0];
+    GameInput* old_input = &input[1];
+
     // NOTE: Run the game loop.
     // TODO: Replace later with a better loop.
     running = true;
-    int x_offset = 0;
-    int y_offset = 0;
     
     // NOTE: This is for the Square wave sound.
     // TODO: Remove later
     uint32_t running_sample_index = 0;
 
     while (running) {
-        
+         
         // NOTE: Process Window messages 
         Win32ProcessMessageQueue();
         
         // NOTE: Poll Xinput events. Should this be done more frequently?
         // TODO: XInputGetState stalls if the controller is not plugged in so later on, 
         //       change it to only poll active controllers.
-        Win32PollXInput(&sound_output);
+        Win32PollXInput(new_input, old_input);
 
         // TODO: This is for debugging purposes.
         // NOTE: Vibrates the first controller.
-        XINPUT_VIBRATION vibration = { };
-        vibration.wLeftMotorSpeed  = 3000;
-        vibration.wRightMotorSpeed = 3000;
-        XInputSetState(0, &vibration);
+        //XINPUT_VIBRATION vibration = { };
+        //vibration.wLeftMotorSpeed  = 3000;
+        //vibration.wRightMotorSpeed = 3000;
+        //XInputSetState(0, &vibration);
 
 
 
@@ -191,12 +207,9 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, 
         DWORD write_cursor = 0;
         bool sound_is_valid = true;
 
-        if (!SUCCEEDED(global_secondary_buffer->GetCurrentPosition(&play_cursor, &write_cursor))) {
-            // NOTE: Current buffer did not exist.
-            // TODO: Diagnostic
-            sound_is_valid = false;
-            OutputDebugString(L"DEBUG: Current buffer did not exist \n");
-        } else {
+        // TODO: tighten up sound logic so that we know where we should be 
+        // writing to and can anticipate the time spent in game update.
+        if (SUCCEEDED(global_secondary_buffer->GetCurrentPosition(&play_cursor, &write_cursor))) {
             byte_to_lock = (sound_output.running_sample_index * sound_output.bytes_per_sample) % sound_output.secondary_buffer_size;
 
             target_cursor = (play_cursor + (sound_output.latency_sample_count * sound_output.bytes_per_sample)) % sound_output.secondary_buffer_size;
@@ -210,6 +223,11 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, 
                 bytes_to_write = target_cursor - byte_to_lock;
             }
             sound_is_valid = true;
+        } else {
+            // NOTE: Current buffer did not exist.
+            // TODO: Diagnostic
+            sound_is_valid = false;
+            OutputDebugString(L"DEBUG: Current buffer did not exist \n");
         }
 
         // NOTE: Game specific graphics and sound
@@ -225,7 +243,7 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, 
         graphics_buffer.Pitch = global_back_buffer.Pitch;
 
         // Run game update buffers.
-        GameUpdateAndRender(&graphics_buffer, &sound_buffer);
+        GameUpdateAndRender(&game_memory, &graphics_buffer, &sound_buffer, new_input);
 
         // NOTE: Directsound output
         if (sound_is_valid) {
@@ -236,6 +254,12 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, 
 
         // NOTE: Update window graphics. 
         Win32UpdateWindow(&hwnd);
+
+
+        GameInput* temp = new_input;
+        new_input = old_input;
+        old_input = temp;
+
     }
     return 0;
 }
@@ -313,8 +337,26 @@ static void Win32LoadXInput() {
     } 
 }
 
-static void Win32PollXInput(Win32SoundOutput* sound_output) {
+// NOTE: Win32ProcessXInputDigitalButton() on handmade hero
+static void Win32WriteButtonToInput(DWORD x_input_button_state, GameButtonState* new_button_state, GameButtonState* old_button_state, DWORD button_bit) {
+    
+    new_button_state->ended_down = ((x_input_button_state & button_bit) == button_bit);
+    new_button_state->half_transition_count = (old_button_state->ended_down == new_button_state->ended_down) ? 1 : 0;
+
+}
+
+static void Win32PollXInput(GameInput* new_input, GameInput* old_input) {
+    int max_controller_count = XUSER_MAX_COUNT;
+    
+    if (max_controller_count > ArrayCount(new_input->controllers)) {
+        max_controller_count = ArrayCount(new_input->controllers);
+    }
+    
     for (DWORD controller_index = 0; controller_index < XUSER_MAX_COUNT; ++controller_index) {
+        
+        GameControllerInput* old_controller = &old_input->controllers[controller_index];
+        GameControllerInput* new_controller = &new_input->controllers[controller_index];
+        
         XINPUT_STATE controller_state = { };
         if (XInputGetState(controller_index, &controller_state) == ERROR_SUCCESS) {
             // NOTE: This controller is plugged in.
@@ -328,57 +370,47 @@ static void Win32PollXInput(Win32SoundOutput* sound_output) {
             bool down = (pad->wButtons & XINPUT_GAMEPAD_DPAD_DOWN);
             bool left = (pad->wButtons & XINPUT_GAMEPAD_DPAD_LEFT);
             bool right = (pad->wButtons & XINPUT_GAMEPAD_DPAD_RIGHT);
-            bool start = (pad->wButtons & XINPUT_GAMEPAD_START);
-            bool back = (pad->wButtons & XINPUT_GAMEPAD_BACK);
-            bool left_shoulder = (pad->wButtons & XINPUT_GAMEPAD_LEFT_SHOULDER);
-            bool right_shoulder = (pad->wButtons & XINPUT_GAMEPAD_RIGHT_SHOULDER);
-            bool a_button = (pad->wButtons & XINPUT_GAMEPAD_A);
-            bool b_button = (pad->wButtons & XINPUT_GAMEPAD_B);
-            bool x_button = (pad->wButtons & XINPUT_GAMEPAD_X);
-            bool y_button = (pad->wButtons & XINPUT_GAMEPAD_Y);
 
-            int16_t stick_left_x = pad->sThumbLX;
-            int16_t stick_left_y = pad->sThumbLY;
+            new_controller->is_analog = true;
+            new_controller->start_x = old_controller->end_x;
+            new_controller->start_y = old_controller->end_y;
 
-            // TODO: This is only for debugging purposes.
-            /*if (up || y_button) { ++y_offset; }
-            if (down || a_button) { --y_offset; }
-            if (left || x_button) { ++x_offset; }
-            if (right || b_button) { --x_offset; }*/
+            float X;
+            if (pad->sThumbLX < 0) {
+                X = (float)pad->sThumbLX / 32768.0f;
+            }
+            else {
+                X = (float)pad->sThumbLX / 32767.0f;
+            }
+            new_controller->min_x = new_controller->max_x = new_controller->end_x = X;
+
+            float Y;
+            if (pad->sThumbLY < 0) {
+                Y = (float)pad->sThumbLY / 32768.0f;
+            }
+            else {
+                Y = (float)pad->sThumbLY / 32767.0f;
+            }
+            new_controller->min_y = new_controller->max_y = new_controller->end_y = Y;
+
+           
             
-            // DEBUG: change sound pitch on button press
-            if (left_shoulder) {
-                // NOTE: D#
-                sound_output->tone_hz = 622;
-                sound_output->wave_period = sound_output->samples_per_second / sound_output->tone_hz;
-            }
-            if (right_shoulder) {
-                // NOTE: E
-                sound_output->tone_hz = 659;
-                sound_output->wave_period = sound_output->samples_per_second / sound_output->tone_hz;
-            }
-            if (x_button) {
-                // NOTE: B
-                sound_output->tone_hz = 494;
-                sound_output->wave_period = sound_output->samples_per_second / sound_output->tone_hz;
-            }
-            if (y_button) {
-                // NOTE: D
-                sound_output->tone_hz = 587;
-                sound_output->wave_period = sound_output->samples_per_second / sound_output->tone_hz;
-            }
-            if (b_button) {
-                // NOTE: C
-                sound_output->tone_hz = 523;
-                sound_output->wave_period = sound_output->samples_per_second / sound_output->tone_hz;
-            }
-            if (a_button) {
-                // NOTE: A
-                sound_output->tone_hz = 440;
-                sound_output->wave_period = sound_output->samples_per_second / sound_output->tone_hz;
-            }
-        }
-        else {
+            // TODO: Handle deadzone
+            // XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE
+            // XINPUT_GAMEPAD_RIGHT_THUMB_DEADZONE
+
+            Win32WriteButtonToInput(pad->wButtons, &new_controller->a_button, &old_controller->a_button, XINPUT_GAMEPAD_A);
+            Win32WriteButtonToInput(pad->wButtons, &new_controller->b_button, &old_controller->b_button, XINPUT_GAMEPAD_B);
+            Win32WriteButtonToInput(pad->wButtons, &new_controller->x_button, &old_controller->x_button, XINPUT_GAMEPAD_X);
+            Win32WriteButtonToInput(pad->wButtons, &new_controller->y_button, &old_controller->y_button, XINPUT_GAMEPAD_Y);
+            Win32WriteButtonToInput(pad->wButtons, &new_controller->left_shoulder, &old_controller->left_shoulder, XINPUT_GAMEPAD_LEFT_SHOULDER);
+            Win32WriteButtonToInput(pad->wButtons, &new_controller->right_shoulder, &old_controller->right_shoulder, XINPUT_GAMEPAD_RIGHT_SHOULDER);
+
+            // bool start = (pad->wButtons & XINPUT_GAMEPAD_START);
+            // bool back = (pad->wButtons & XINPUT_GAMEPAD_BACK);
+
+
+        } else {
             // TODO: Handle unavailable controller if needed. Ex: tell user that controller is unplugged.
         }
     }
