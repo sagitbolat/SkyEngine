@@ -1,20 +1,20 @@
 /* TODO: THIS IS NOT THE FINAL PLATFORM LAYER.
-   * > To-do list:
-     * >> Saved game locations
-     * >> Getting a handle to our own executable file
-     * >> Asset loading path
-     * >> Threading (launch a thread)
-     * >> Raw Input (support for multi-keyboard input)
-     * >> Sleep/timeBeginPeriod
-     * >> ClipCursor() (for multi-monitor support)
-     * >> Fullscreen support
-     * >> WM_SETCURSOR (control cursor visibility)
-     * >> QueryCancelAutoplay
-     * >> WM_ACTIVATEAPP (for when we are not the active app)
-     * >> Blit speed improvements (BitBlt)
-     * >> Hardware acceleration (OpenGL or Direct3D)
-     * >> GetKeyboardLayout (international keyboard like polish or french layout)
-     * >>>> OTHER
+   * To-do list:
+     * Saved game locations
+     * Getting a handle to our own executable file
+     * Asset loading path
+     * Threading (launch a thread)
+     * Raw Input (support for multi-keyboard input)
+     * Sleep/timeBeginPeriod
+     * ClipCursor() (for multi-monitor support)
+     * Fullscreen support
+     * WM_SETCURSOR (control cursor visibility)
+     * QueryCancelAutoplay
+     * WM_ACTIVATEAPP (for when we are not the active app)
+     * Blit speed improvements (BitBlt)
+     * Hardware acceleration (OpenGL or Direct3D)
+     * GetKeyboardLayout (international keyboard like polish or french layout)
+     * OTHER
  */
 
 #include "skyengine.h"
@@ -90,13 +90,11 @@ static  Win32BitmapBuffer   Win32ResizeDIBSection   (Win32BitmapBuffer buffer, i
 static  void                Win32CopyBufferToWindow (HDC device_context, int window_width, int window_height, Win32BitmapBuffer buffer);
 static  void                Win32LoadXInput         ();
 static  void                Win32WriteButtonToInput (DWORD x_input_button_state, GameButtonState* new_button_state, GameButtonState* old_button_state, DWORD button_bit);
-static  void                Win32PollXInput         (GameInput* new_input, GameInput* old_input);
+static  void                Win32HandleInput        (GameInput* new_input, GameInput* old_input);
 static  void                Win32InitDirectSound    (HWND hwnd, int32_t samples_per_second, int32_t buffer_size);
-//static  void                WriteSineWave           (Win32SoundOutput* sound_output, GameSoundBuffer* sound_buffer);
 static  void                Win32ClearSoundBuffer   (Win32SoundOutput* sound_output);
 static  void                Win32FillSoundBuffer    (Win32SoundOutput* sound_output, DWORD byte_to_lock, DWORD bytes_to_write, GameSoundBuffer* sound_buffer);
 static  bool                Win32InitWindow         (HINSTANCE hInstance, int nCmdShow, HWND* hwnd);
-static  void                Win32ProcessMessageQueue();
 static  void                Win32UpdateWindow       (HWND* hwnd);
 
 
@@ -125,7 +123,14 @@ static x_input_set_state* XInputSetState_ = XInputSetStateStub;
 #define DIRECT_SOUND_CREATE(name) HRESULT WINAPI name(LPCGUID pcGuidDevice, LPDIRECTSOUND* ppDS, LPUNKNOWN pUnkOuter)
 typedef DIRECT_SOUND_CREATE(direct_sound_create);
 
-
+void Win32ProcessMessageQueue() {
+    // NOTE: Processes Message Queue
+    MSG message = { };
+    while (PeekMessageW(&message, 0, 0, 0, PM_REMOVE)) {
+        TranslateMessage(&message);
+        DispatchMessage(&message);
+    }
+}
 
 int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _In_ LPWSTR lpCmdLine, _In_ int nCmdShow) {
     HWND hwnd = { };
@@ -183,15 +188,13 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, 
 
     while (running) {
          
-        // NOTE: Process Window messages 
         Win32ProcessMessageQueue();
-        
         // NOTE: Poll Xinput events. Should this be done more frequently?
         // TODO: XInputGetState stalls if the controller is not plugged in so later on, 
         //       change it to only poll active controllers.
-        Win32PollXInput(new_input, old_input);
+        Win32HandleInput(new_input, old_input);
 
-        // TODO: This is for debugging purposes.
+        // TODO: This is for debugging purposes. Move to game logic.
         // NOTE: Vibrates the first controller.
         //XINPUT_VIBRATION vibration = { };
         //vibration.wLeftMotorSpeed  = 3000;
@@ -305,14 +308,6 @@ bool Win32InitWindow(HINSTANCE hInstance, int nCmdShow, HWND* hwnd) {
     return true;
 }
 
-void Win32ProcessMessageQueue() {
-    // NOTE: Processes Message Queue
-    MSG message = { };
-    while (PeekMessageW(&message, 0, 0, 0, PM_REMOVE)) {
-        TranslateMessage(&message);
-        DispatchMessage(&message);
-    }
-}
 
 void Win32UpdateWindow(HWND *hwnd) {
     HDC device_context = GetDC(*hwnd);
@@ -322,6 +317,81 @@ void Win32UpdateWindow(HWND *hwnd) {
 }
 
 
+static void Win32ProcessKeyboardMessage(GameButtonState* new_state, bool is_down)
+{
+    Assert(new_state->ended_down != is_down);
+    new_state->ended_down = is_down;
+    ++new_state->half_transition_count;
+}
+
+static void Win32ProcessPendingMessages(GameControllerInput* keyboard_controller) {
+    MSG message = { };
+    while (PeekMessageW(&message, 0, 0, 0, PM_REMOVE)) {
+        
+        switch (message.message) {
+			case WM_QUIT:
+				running = false;
+				break;
+			case WM_SYSKEYDOWN: {
+				uint32_t vk_code = message.wParam;
+				//NOTE: Makes the window close if alt f4 is pressed.
+				//NOTE: bool altKeyWasDown = ((lParam & (1 << 29)) != 0);
+				if (vk_code == VK_F4) {
+					running = false; // TODO: Make the game pop up with an "Are you sure you want to Quit?" message
+				}
+			}
+			case WM_SYSKEYUP:
+			case WM_KEYDOWN:
+            case WM_KEYUP: {
+                uint32_t vk_code = message.wParam;
+                bool was_down = ((message.lParam & (1 << 30)) != 0);
+                bool is_down = ((message.lParam & (1 << 30)) == 0);
+                if (was_down != is_down) {
+                    if (vk_code == 'W') {
+
+                    }
+                    if (vk_code == 'A') {
+
+                    }
+                    if (vk_code == 'S') {
+
+                    }
+                    if (vk_code == 'D') {
+
+                    }
+                    if (vk_code == 'Q') {
+                        Win32ProcessKeyboardMessage(&keyboard_controller->left_shoulder, is_down);
+                    }
+                    if (vk_code == 'E') {
+
+                    }
+                    if (vk_code == VK_UP) {
+
+                    }
+                    if (vk_code == VK_DOWN) {
+
+                    }
+                    if (vk_code == VK_LEFT) {
+
+                    }
+                    if (vk_code == VK_RIGHT) {
+
+                    }
+                    if (vk_code == VK_ESCAPE) {
+
+                    }
+                    if (vk_code == VK_SPACE) {
+
+                    }
+                }
+            } break;
+            default: {
+                TranslateMessage(&message);
+                DispatchMessageA(&message);
+            } break;
+        }
+    }
+}
 
 static void Win32LoadXInput() {
     // NOTE: Load XInput 1.4
@@ -345,17 +415,29 @@ static void Win32WriteButtonToInput(DWORD x_input_button_state, GameButtonState*
 
 }
 
-static void Win32PollXInput(GameInput* new_input, GameInput* old_input) {
+static void Win32HandleInput(GameInput* new_input, GameInput* old_input) {
+    
+    GameControllerInput* old_keyboard_controller = &old_input->controllers[0];
+    GameControllerInput* new_keyboard_controller = &new_input->controllers[0];
+    GameControllerInput zero_controller = {};
+    *new_keyboard_controller = zero_controller;
+    
+    for (int button_index = 0; button_index < ArrayCount(new_keyboard_controller->button_states); ++button_index) {
+        new_keyboard_controller->button_states[button_index].ended_down = old_keyboard_controller->button_states[button_index].ended_down;
+    }
+
+    Win32ProcessPendingMessages(new_keyboard_controller);
+    
     int max_controller_count = XUSER_MAX_COUNT;
     
-    if (max_controller_count > ArrayCount(new_input->controllers)) {
-        max_controller_count = ArrayCount(new_input->controllers);
+    if (max_controller_count > ArrayCount(new_input->controllers) - 1) {
+        max_controller_count = ArrayCount(new_input->controllers) - 1;
     }
     
-    for (DWORD controller_index = 0; controller_index < XUSER_MAX_COUNT; ++controller_index) {
-        
-        GameControllerInput* old_controller = &old_input->controllers[controller_index];
-        GameControllerInput* new_controller = &new_input->controllers[controller_index];
+    for (DWORD controller_index = 0; controller_index < max_controller_count; ++controller_index) {
+        DWORD our_controller_index = controller_index + 1;
+        GameControllerInput* old_controller = &old_input->controllers[our_controller_index];
+        GameControllerInput* new_controller = &new_input->controllers[our_controller_index];
         
         XINPUT_STATE controller_state = { };
         if (XInputGetState(controller_index, &controller_state) == ERROR_SUCCESS) {
@@ -509,35 +591,11 @@ static void Win32InitDirectSound(HWND hwnd, int32_t samples_per_second, int32_t 
 LRESULT CALLBACK Win32WindowProc(HWND hwnd, UINT windows_message, WPARAM wParam, LPARAM lParam) {
     LRESULT result = { };
     switch (windows_message) {
-        case WM_SYSKEYDOWN: {
-            uint32_t vk_code = wParam;
-            bool was_down = ((lParam & (1 << 30)) != 0);     
-            bool is_down  = ((lParam & (1 << 30)) == 0); 
-            // TODO: Pass the info on key event to the game.
-
-            //NOTE: Makes the window close if alt f4 is pressed.
-            //NOTE: bool altKeyWasDown = ((lParam & (1 << 29)) != 0);
-            if (vk_code == VK_F4){
-                running = false; // TODO: Make the game pop up with an "Are you sure you want to Quit?" message
-            }
-        } break;
-        case WM_SYSKEYUP: {
-            uint32_t vk_code = wParam;
-            bool was_down = ((lParam & (1 << 30)) != 0);     
-            bool is_down  = ((lParam & (1 << 30)) == 0); 
-            // TODO: Pass the info on key event to the game.
-        } break;
-        case WM_KEYDOWN: {
-            uint32_t vk_code = wParam;
-            bool was_down = ((lParam & (1 << 30)) != 0);     
-            bool is_down  = ((lParam & (1 << 30)) == 0); 
-            // TODO: Pass the info on key event to the game.
-        } break;
+        case WM_SYSKEYDOWN: 
+        case WM_SYSKEYUP: 
+        case WM_KEYDOWN: 
         case WM_KEYUP: {
-            uint32_t vk_code = wParam;
-            bool was_down = ((lParam & (1 << 30)) != 0);     
-            bool is_down  = ((lParam & (1 << 30)) == 0); 
-            // TODO: Pass the info on key event to the game.
+            Assert(!"Keyboard input came in through a non - dispatch message!");
         } break;
         
         case WM_SIZE: {

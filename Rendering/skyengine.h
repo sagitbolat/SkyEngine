@@ -93,7 +93,7 @@ struct GameControllerInput {
 };
 // NOTE: input data for 4 controllers
 struct GameInput {
-    GameControllerInput controllers[4];
+    GameControllerInput controllers[5];
 };
 
 
